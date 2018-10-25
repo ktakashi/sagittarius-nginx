@@ -1,4 +1,3 @@
-NGINX_VERSION=1.15.5
 MODULE_LOCATION=../../src
 
 all: nginx
@@ -8,7 +7,9 @@ nginx: nginx-$(NGINX_VERSION)/objs/Makefile
 
 nginx-$(NGINX_VERSION)/objs/Makefile: nginx.tar.gz
 	cd nginx-$(NGINX_VERSION) && \
-	  ./configure --add-dynamic-module=$(MODULE_LOCATION)
+	  ./configure --with-compat \
+	    --with-cc-opt="-Wno-missing-field-initializers" \
+	    --add-dynamic-module=$(MODULE_LOCATION)
 
 nginx.tar.gz:
 	curl -Lo nginx.tar.gz \
