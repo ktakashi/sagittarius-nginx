@@ -7,5 +7,5 @@
     (import (rnrs))
 
 (define (nginx-dispatch-request uri request)
-  (display "Hooray! It worked!!") (newline))
+  (display "Hooray! It worked!!" (current-error-port)) (newline (current-error-port)))
 )

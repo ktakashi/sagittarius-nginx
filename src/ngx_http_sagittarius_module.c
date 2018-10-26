@@ -143,7 +143,9 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 				  void *conf)
 {
   ngx_http_core_loc_conf_t  *clcf;
-  
+
+  ngx_log_debug(NGX_LOG_DEBUG, cf->log, 0,
+		"Handling Sagittarius configuration");
   clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
   clcf->handler = ngx_http_sagittarius_handler;
   
@@ -168,6 +170,9 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   ngx_buf_t    *b;
   ngx_chain_t   out;
 
+  ngx_log_debug(NGX_LOG_DEBUG, r->connection->log, 0,
+		"Handling Sagittarius request for %s.", r->uri.data);
+  
   /* TODO convert body to input port... */
   rc = ngx_http_discard_request_body(r);
   if (rc != NGX_OK && rc != NGX_AGAIN) {
@@ -180,6 +185,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 
   /* convert Scheme response to C response */
   /* TODO do it above... */
+  r->headers_out.status = NGX_HTTP_OK;
   r->headers_out.content_type.len = sizeof("text/plain") - 1;
   r->headers_out.content_type.data = (u_char *) "text/plain";
 

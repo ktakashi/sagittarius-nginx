@@ -18,3 +18,6 @@ nginx.tar.gz:
 
 clean:
 	rm -rf nginx-$(NGINX_VERSION) nginx.tar.gz
+
+install:
+	$(MAKE) -C nginx-$(NGINX_VERSION) install
