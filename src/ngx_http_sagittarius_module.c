@@ -107,6 +107,26 @@ static SgObject nginx_request_p(SgObject *argv, int argc, void *data)
 static SG_DEFINE_SUBR(nginx_request_p_stub, 1, 0, nginx_request_p,
 		      SG_FALSE, NULL);
 
+#define SG_DEFINE_ACCESSOR(who, type, tp, acc, cname)			\
+  static SgObject cname(SgObject *argv, int argc, void *data)		\
+  {									\
+    if (argc != 1) {							\
+      Sg_WrongNumberOfArgumentsViolation(SG_INTERN(who), 1, argc, SG_NIL); \
+    }									\
+    if (!tp(argv[0])) {							\
+      Sg_WrongTypeOfArgumentViolation(SG_INTERN(who),SG_INTERN(type),	\
+				      argv[0], SG_NIL);			\
+    }									\
+    return acc(argv[0]);						\
+  }									\
+  static SG_DEFINE_SUBR(SG_CPP_CAT(cname, _stub), 1, 0, cname,		\
+			SG_FALSE, NULL);
+
+SG_DEFINE_ACCESSOR("nginx-request-headers", "nginx-request",
+		   SG_NGINX_REQUESTP, nr_headers, nginx_request_headers);
+SG_DEFINE_ACCESSOR("nginx-request-body", "nginx-request",
+		   SG_NGINX_REQUESTP, nr_body, nginx_request_body);
+
 static SgObject sagittarius_nginx_symbol = SG_UNDEF;
 static SgObject sagittarius_nginx_library = SG_UNDEF;
 static SgObject nginx_dispatch = SG_UNDEF;
@@ -127,6 +147,20 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   SG_PROCEDURE_NAME(&nginx_request_p_stub) = SG_MAKE_STRING("nginx-request?");
   SG_PROCEDURE_TRANSPARENT(&nginx_request_p_stub) = SG_PROC_TRANSPARENT;
 
+#define INSERT_ACCESSOR(name, cname)					\
+  do {									\
+    Sg_InsertBinding(sagittarius_nginx_library, SG_INTERN(name),	\
+		     &SG_CPP_CAT(cname, _stub));			\
+    SG_PROCEDURE_NAME(&SG_CPP_CAT(cname, _stub)) = SG_MAKE_STRING(name); \
+    SG_PROCEDURE_TRANSPARENT(&SG_CPP_CAT(cname, _stub)) =		\
+      SG_PROC_NO_SIDE_EFFECT;						\
+  } while (0)
+
+  INSERT_ACCESSOR("nginx-request-headers", nginx_request_headers);
+  INSERT_ACCESSOR("nginx-request-body", nginx_request_body);
+
+#undef INSERT_ACCESSOR
+  
   o = Sg_FindBinding(sagittarius_nginx_library,
 		     SG_INTERN("nginx-dispatch-request"), SG_UNBOUND);
   if (SG_UNBOUNDP(o)) {
