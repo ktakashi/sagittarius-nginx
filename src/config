@@ -1,9 +1,10 @@
+SAGITTARIUS_CONFIG=${SAGITTARIUS_CONFIG:-"sagittarius-config"}
 ngx_feature="Sagittarius HTTP"
 ngx_feature_name=
 ngx_feature_run=no
-ngx_feature_inc_path=`sagittarius-config -I`
+ngx_feature_inc_path=`${SAGITTARIUS_CONFIG} -I`
 ngx_feature_incs="#include <sagittarius.h>"
-ngx_feature_libs=`sagittarius-config -l`
+ngx_feature_libs=`${SAGITTARIUS_CONFIG} -l`
 ngx_feature_test="SgVM *vm"
 . auto/feature
 
