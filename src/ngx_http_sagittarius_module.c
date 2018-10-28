@@ -107,7 +107,7 @@ static SgObject nginx_request_p(SgObject *argv, int argc, void *data)
 static SG_DEFINE_SUBR(nginx_request_p_stub, 1, 0, nginx_request_p,
 		      SG_FALSE, NULL);
 
-#define SG_DEFINE_ACCESSOR(who, type, tp, acc, cname)			\
+#define SG_DEFINE_ACCESSOR(who, type, tp, acc, cast, cname)		\
   static SgObject cname(SgObject *argv, int argc, void *data)		\
   {									\
     if (argc != 1) {							\
@@ -117,15 +117,17 @@ static SG_DEFINE_SUBR(nginx_request_p_stub, 1, 0, nginx_request_p,
       Sg_WrongTypeOfArgumentViolation(SG_INTERN(who),SG_INTERN(type),	\
 				      argv[0], SG_NIL);			\
     }									\
-    return acc(argv[0]);						\
+    return acc(cast(argv[0]));						\
   }									\
   static SG_DEFINE_SUBR(SG_CPP_CAT(cname, _stub), 1, 0, cname,		\
 			SG_FALSE, NULL);
 
 SG_DEFINE_ACCESSOR("nginx-request-headers", "nginx-request",
-		   SG_NGINX_REQUESTP, nr_headers, nginx_request_headers);
+		   SG_NGINX_REQUESTP, nr_headers, SG_NGINX_REQUEST,
+		   nginx_request_headers);
 SG_DEFINE_ACCESSOR("nginx-request-body", "nginx-request",
-		   SG_NGINX_REQUESTP, nr_body, nginx_request_body);
+		   SG_NGINX_REQUESTP, nr_body, SG_NGINX_REQUEST,
+		   nginx_request_body);
 
 static SgObject sagittarius_nginx_symbol = SG_UNDEF;
 static SgObject sagittarius_nginx_library = SG_UNDEF;
@@ -139,17 +141,18 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   sagittarius_nginx_symbol = SG_INTERN("(sagittarius nginx)");
   sagittarius_nginx_library = Sg_FindLibrary(sagittarius_nginx_symbol, FALSE);
   Sg_InitStaticClassWithMeta(SG_CLASS_NGINX_REQUEST, UC("<nginx-request>"),
-			     sagittarius_nginx_library, NULL,
+			     SG_LIBRARY(sagittarius_nginx_library), NULL,
 			     SG_FALSE, nr_slots, 0);
 
-  Sg_InsertBinding(sagittarius_nginx_library, SG_INTERN("nginx-request?"),
-		   &nginx_request_p_stub);
+  Sg_InsertBinding(SG_LIBRARY(sagittarius_nginx_library),
+		   SG_INTERN("nginx-request?"), &nginx_request_p_stub);
   SG_PROCEDURE_NAME(&nginx_request_p_stub) = SG_MAKE_STRING("nginx-request?");
   SG_PROCEDURE_TRANSPARENT(&nginx_request_p_stub) = SG_PROC_TRANSPARENT;
 
 #define INSERT_ACCESSOR(name, cname)					\
   do {									\
-    Sg_InsertBinding(sagittarius_nginx_library, SG_INTERN(name),	\
+    Sg_InsertBinding(SG_LIBRARY(sagittarius_nginx_library),		\
+		     SG_INTERN(name),					\
 		     &SG_CPP_CAT(cname, _stub));			\
     SG_PROCEDURE_NAME(&SG_CPP_CAT(cname, _stub)) = SG_MAKE_STRING(name); \
     SG_PROCEDURE_TRANSPARENT(&SG_CPP_CAT(cname, _stub)) =		\
@@ -180,7 +183,7 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 
   ngx_log_debug(NGX_LOG_DEBUG, cf->log, 0,
 		"Handling Sagittarius configuration");
-  clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+  clcf = (ngx_http_core_loc_conf_t *)ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
   clcf->handler = ngx_http_sagittarius_handler;
   
   return NGX_CONF_OK;
@@ -229,7 +232,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     return rc;
   }
 
-  b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+  b = (ngx_buf_t *)ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
   if (b == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "Failed to allocate response buffer.");

@@ -4,11 +4,16 @@ ngx_feature_name=
 ngx_feature_run=no
 ngx_feature_inc_path=`${SAGITTARIUS_CONFIG} -I`
 ngx_feature_incs="#include <sagittarius.h>"
-ngx_feature_libs=`${SAGITTARIUS_CONFIG} -l`
+ngx_feature_libs=`${SAGITTARIUS_CONFIG} -L -l`
 ngx_feature_test="SgVM *vm"
 . auto/feature
 
 ngx_addon_name="ngx_http_sagittarius_module"
+
+case `uname` in
+    CYGWIN*) module_source=$ngx_addon_dir/ngx_http_sagittarius_module.cpp;;
+    *)       module_source=$ngx_addon_dir/ngx_http_sagittarius_module.c;;
+esac
 
 if [ $ngx_found = yes ]; then
     if [ -n "$ngx_module_link" ]; then
@@ -17,7 +22,7 @@ if [ $ngx_found = yes ]; then
 	    ngx_module_name="ngx_http_sagittarius_module"
 	    ngx_module_incs="$ngx_feature_inc_path"
 	    ngx_module_deps=
-	    ngx_module_srcs="$ngx_addon_dir/ngx_http_sagittarius_module.c"
+	    ngx_module_srcs="$module_source"
 	    ngx_module_libs="$ngx_feature_libs"
 	    ngx_module_link=DYNAMIC
 	    . auto/module
