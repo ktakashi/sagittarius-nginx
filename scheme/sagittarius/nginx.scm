@@ -6,6 +6,8 @@
     (export nginx-dispatch-request)
     (import (rnrs))
 
-(define (nginx-dispatch-request uri request)
-  (display "Hooray! It worked!!" (current-error-port)) (newline (current-error-port)))
+(define (nginx-dispatch-request uri request response)
+  (display "Hooray! It worked!!" (current-error-port))
+  (newline (current-error-port))
+  404)
 )
