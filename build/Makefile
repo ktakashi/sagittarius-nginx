@@ -9,9 +9,12 @@ MODULE_LOCATION=../../src
 ifeq ($(shell uname), Darwin)
   CC_OPT=$(OPTS) -I/usr/local/opt/openssl/include
   WITH_LD_OPT=--with-ld-opt="$(LDFLAGS) -L/usr/local/opt/openssl/lib"
+  LD_LIBRARY_PATH=DYLD_LIBRARY_PATH=$$DYLD_LIBRARY_PATH:./nginx-$(NGINX_VERSION)/objs
 else
   CC_OPT=$(OPTS)
+  LD_LIBRARY_PATH=LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:./nginx-$(NGINX_VERSION)/objs
 endif
+
 
 all: nginx
 
@@ -37,3 +40,15 @@ clean:
 
 install:
 	$(MAKE) -C nginx-$(NGINX_VERSION) install
+
+run: prep
+	$(LD_LIBRARY_PATH) ./nginx-$(NGINX_VERSION)/objs/nginx \
+	-c $(shell pwd)/../conf/example.conf \
+	-p $(shell pwd)/nginx-$(NGINX_VERSION)
+
+prep: nginx
+	mkdir nginx-$(NGINX_VERSION)/logs
+
+stop:
+	./nginx-$(NGINX_VERSION)/objs/nginx -s stop \
+	-p $(shell pwd)/nginx-$(NGINX_VERSION)

@@ -38,3 +38,9 @@ install:
 # nginx doesn't provide uninstall target. sad...
 uninstall:
 	$(RM) $(DESTDIR)$(SAGITTARIUS_SITELIB)/sagittarius
+
+run:
+	$(MAKE) -C build run
+
+stop:
+	$(MAKE) -C build stop
