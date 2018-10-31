@@ -3,8 +3,15 @@ NGINX_VERSION      ?= 1.15.5
 
 INC_PATH=$(shell $(SAGITTARIUS_CONFIG) -I)
 
-CC_OPT=-Wno-missing-field-initializers $(INC_PATH)
+OPTS=-Wno-missing-field-initializers $(INC_PATH)
 MODULE_LOCATION=../../src
+
+ifeq ($(shell uname), Darwin)
+  CC_OPT=$(OPTS) -I/usr/local/opt/openssl/include
+  WITH_LD_OPT=--with-ld-opt="$(LDFLAGS) -L/usr/local/opt/openssl/lib"
+else
+  CC_OPT=$(OPTS)
+endif
 
 all: nginx
 
@@ -17,7 +24,7 @@ nginx-$(NGINX_VERSION)/objs/Makefile: nginx.tar.gz
 	  --with-threads --with-select_module --with-poll_module \
 	  --with-http_ssl_module --with-http_v2_module \
 	  --with-http_realip_module \
-	  --with-cc-opt="$(CC_OPT)" \
+	  --with-cc-opt="$(CC_OPT)" $(WITH_LD_OPT)\
 	  --add-dynamic-module=$(MODULE_LOCATION)
 
 nginx.tar.gz:
