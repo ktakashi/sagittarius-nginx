@@ -5,14 +5,13 @@ INC_PATH=$(shell $(SAGITTARIUS_CONFIG) -I)
 
 OPTS=-Wno-missing-field-initializers $(INC_PATH)
 MODULE_LOCATION=../../src
+SANDBOX=nginx-$(NGINX_VERSION)/sandbox
 
 ifeq ($(shell uname), Darwin)
   CC_OPT=$(OPTS) -I/usr/local/opt/openssl/include
   WITH_LD_OPT=--with-ld-opt="$(LDFLAGS) -L/usr/local/opt/openssl/lib"
-  LD_LIBRARY_PATH=DYLD_LIBRARY_PATH=$$DYLD_LIBRARY_PATH:./nginx-$(NGINX_VERSION)/objs
 else
   CC_OPT=$(OPTS)
-  LD_LIBRARY_PATH=LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:./nginx-$(NGINX_VERSION)/objs
 endif
 
 
@@ -42,13 +41,15 @@ install:
 	$(MAKE) -C nginx-$(NGINX_VERSION) install
 
 run: prep
-	$(LD_LIBRARY_PATH) ./nginx-$(NGINX_VERSION)/objs/nginx \
-	-c $(shell pwd)/../conf/example.conf \
-	-p $(shell pwd)/nginx-$(NGINX_VERSION)
+	./nginx-$(NGINX_VERSION)/objs/nginx \
+	  -c $(shell pwd)/../conf/example.conf \
+	  -p $(shell pwd)/$(SANDBOX)
 
 prep: nginx
-	mkdir nginx-$(NGINX_VERSION)/logs
+	mkdir -p $(SANDBOX)/logs $(SANDBOX)/modules
+	cp nginx-$(NGINX_VERSION)/objs/ngx_http_sagittarius_module.so $(SANDBOX)/modules/
 
 stop:
 	./nginx-$(NGINX_VERSION)/objs/nginx -s stop \
-	-p $(shell pwd)/nginx-$(NGINX_VERSION)
+	-c $(shell pwd)/../conf/example.conf \
+	-p $(shell pwd)/$(SANDBOX)
