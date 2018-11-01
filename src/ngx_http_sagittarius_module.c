@@ -204,6 +204,7 @@ static SgObject nginx_dispatch = SG_UNDEF;
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 {
   SgObject o;
+  ngx_log_debug(NGX_LOG_DEBUG, cycle->log, 0, "Initialising process");
   /* Initialise the sagittarius VM */
   Sg_Init();
 
