@@ -30,10 +30,12 @@ clean:
 	  SAGITTARIUS_CONFIG=$(SAGITTARIUS_CONFIG) clean
 
 install:
-	$(MAKE) -C build NGINX_VERSION=$(NGINX_VERSION) \
-	  SAGITTARIUS_CONFIG=$(SAGITTARIUS_CONFIG) install
 	$(MKDIR) $(DESTDIR)$(SAGITTARIUS_SITELIB)/sagittarius
 	$(INSTALL) -m0644 scheme/sagittarius/*.scm $(DESTDIR)$(SAGITTARIUS_SITELIB)/sagittarius
+
+install-nginx:
+	$(MAKE) -C build NGINX_VERSION=$(NGINX_VERSION) \
+	  SAGITTARIUS_CONFIG=$(SAGITTARIUS_CONFIG) install
 
 # nginx doesn't provide uninstall target. sad...
 uninstall:

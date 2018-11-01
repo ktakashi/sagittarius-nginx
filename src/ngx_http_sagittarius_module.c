@@ -197,40 +197,206 @@ SG_DEFINE_GETTER("nginx-response-output-port", "nginx-response",
 		 SG_NGINX_RESPONSEP, nres_out, SG_NGINX_RESPONSE,
 		 nginx_response_output_port);
 
+/* conditions */
+static SgClass *error_cpl[] = {
+  SG_CLASS_IO_ERROR,
+  SG_ERROR_CONDITION_CPL,
+  NULL
+};
 
-static SgObject sagittarius_nginx_symbol = SG_UNDEF;
-static SgObject sagittarius_nginx_library = SG_UNDEF;
+SG_CLASS_DECL(Sg_NginxErrorClass);
+#define SG_CLASS_NGINX_ERROR (&Sg_NginxErrorClass)
+
+typedef struct SgNginxErrorRec
+{
+  SG_INSTANCE_HEADER;
+  SgObject status;
+} SgNginxError;
+#define SG_NGINX_ERROR(o) ((SgNginxError *)o)
+#define SG_NGINX_ERRORP(o) SG_ISA(o, SG_CLASS_NGINX_ERROR)
+
+static void nginx_error_printer(SgObject o, SgPort *p, SgWriteContext *ctx)
+{
+  Sg_Printf(p, UC("#<%A %A>"), SG_CLASS(Sg_ClassOf(o))->name,
+	    SG_NGINX_ERROR(o)->status);
+}
+
+SG_DEFINE_CONDITION_ALLOCATOR(nginx_error_allocate, SgNginxError);
+SG_DEFINE_CONDITION_ACCESSOR(nginx_error_status, SgNginxError,
+			     SG_NGINX_ERRORP, status);
+static SgSlotAccessor nginx_error_slots[] = {
+  SG_CLASS_SLOT_SPEC("status", 0, nginx_error_status, nginx_error_status_set),
+  { { NULL } }
+};
+SG_DEFINE_BASE_CLASS(Sg_NginxErrorClass, SgNginxError,
+		     nginx_error_printer, NULL, NULL,
+		     nginx_error_allocate, error_cpl);
+
+static SgObject Sg_MakeNginxError(int status)
+{
+  SgObject c = nginx_error_allocate(SG_CLASS_NGINX_ERROR, SG_NIL);
+  SG_NGINX_ERROR(c)->status = SG_MAKE_INT(status);
+  return c;
+}
+
+static void raise_nginx_error(SgObject who, SgObject msg,
+			      SgObject c, SgObject irr)
+{
+  SgObject sc;
+  if (SG_NULLP(irr)) {
+    sc = Sg_Condition(SG_LIST3(c,
+			       Sg_MakeWhoCondition(who),
+			       Sg_MakeMessageCondition(msg)));
+  } else {
+    sc = Sg_Condition(SG_LIST4(c,
+			       Sg_MakeWhoCondition(who),
+			       Sg_MakeMessageCondition(msg),
+			       Sg_MakeIrritantsCondition(irr)));
+  }
+  Sg_Raise(sc, FALSE);
+}
+
+typedef struct SgResponseOutputPortRec
+{
+  SgPort              parent;
+  ngx_chain_t        *root;
+  ngx_chain_t        *buffer;
+  ngx_http_request_t *request;
+} SgResponseOutputPort;
+
+SG_CLASS_DECL(Sg_ResponseOutputPortClass);
+static SgClass *port_cpl[] = {
+  SG_CLASS_PORT,
+  SG_CLASS_TOP,
+  NULL
+};
+SG_DEFINE_BUILTIN_CLASS(Sg_ResponseOutputPortClass, Sg_DefaultPortPrinter,
+			NULL, NULL, NULL, port_cpl);
+#define SG_CLASS_RESPONSE_OUTPUT_PORT (&Sg_ResponseOutputPortClass)
+#define SG_RESPONSE_OUTPUT_PORT(obj)  ((SgResponseOutputPort*)obj)
+#define SG_RESPONSE_OUTPUT_PORTP(obj)		\
+  SG_XTYPEP(obj, SG_CLASS_RESPONSE_OUTPUT_PORT)
+#define SG_RESPONSE_OUTPUT_PORT_ROOT(obj)	\
+  (SG_RESPONSE_OUTPUT_PORT(obj)->root)
+#define SG_RESPONSE_OUTPUT_PORT_BUFFER(obj)	\
+  (SG_RESPONSE_OUTPUT_PORT(obj)->buffer)
+#define SG_RESPONSE_OUTPUT_PORT_REQUEST(obj)	\
+  (SG_RESPONSE_OUTPUT_PORT(obj)->request)
+
+#define BUFFER_SIZE SG_PORT_DEFAULT_BUFFER_SIZE
+
+static int response_out_close(SgObject self)
+{
+  SG_PORT(self)->closed = SG_PORT_CLOSED;
+  return TRUE;
+}
+
+static void allocate_buffer(SgObject self, ngx_chain_t *parent)
+{
+  ngx_http_request_t *r = SG_RESPONSE_OUTPUT_PORT_REQUEST(self);
+  ngx_chain_t *c = (ngx_chain_t *)ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
+  ngx_buf_t *b = (ngx_buf_t *)ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+  if (c == NULL || b == NULL) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "Failed to allocate response buffer.");
+    raise_nginx_error(SG_INTERN("put-u8"),
+		      SG_MAKE_STRING("[Internal]"
+				     " Failed to allocate response buffer"),
+		      Sg_MakeNginxError(NGX_HTTP_INTERNAL_SERVER_ERROR),
+		      SG_NIL);
+  }
+  /* maybe we can use nginx allocator? */
+  b->start = b->pos = b->last = SG_NEW_ATOMIC2(unsigned char *, BUFFER_SIZE);
+  b->end = b->start + BUFFER_SIZE;
+  b->last_buf = 1;		/* may be reset later*/
+  c->buf = b;
+  c->next = NULL;
+  if (parent) {
+    parent->next = c;
+  }
+  SG_RESPONSE_OUTPUT_PORT_BUFFER(self) = c;
+}
+
+static int64_t response_out_put_u8_array(SgObject self, uint8_t *ba,
+					 int64_t size)
+{
+  int64_t written;
+  ngx_buf_t *buf;		/*  current buffer */
+  if (!SG_RESPONSE_OUTPUT_PORT_BUFFER(self)) {
+    allocate_buffer(self, NULL);
+    SG_RESPONSE_OUTPUT_PORT_ROOT(self) = SG_RESPONSE_OUTPUT_PORT_BUFFER(self);
+  }
+  buf = SG_RESPONSE_OUTPUT_PORT_BUFFER(self)->buf;
+  for (written = 0; written < size; written++) {
+    if (buf->pos == buf->end) {
+      buf->last_buf = 0;
+      allocate_buffer(self, SG_RESPONSE_OUTPUT_PORT_BUFFER(self));
+      buf = SG_RESPONSE_OUTPUT_PORT_BUFFER(self)->buf;
+    }
+    *buf->pos++ = *ba++;
+  }
+  return written;
+}
+
+static SgPortTable response_out_table = {
+  NULL,				/* no flush */
+  response_out_close,
+  NULL,				/* no ready */
+  NULL,				/* lock */
+  NULL,				/* unlock */
+  NULL,				/* position (should we?) */
+  NULL,				/* set position (should we?) */
+  NULL,				/* open (not used?)*/
+  NULL,				/* read u8 */
+  NULL,				/* read all */
+  response_out_put_u8_array,
+  NULL,				/* read str */
+  NULL,				/* write str */
+};
+
+static SgObject make_response_output_port(ngx_http_request_t *request)
+{
+  SgResponseOutputPort *port = SG_NEW(SgResponseOutputPort);
+  SG_INIT_PORT(port, SG_CLASS_RESPONSE_OUTPUT_PORT, SG_OUTPUT_PORT,
+	       &response_out_table, SG_FALSE);
+  port->buffer = NULL;
+  port->request = request;
+  return SG_OBJ(port);
+}
+
 static SgObject nginx_dispatch = SG_UNDEF;
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 {
-  SgObject o;
+  SgObject sym, lib, o;
   ngx_log_debug(NGX_LOG_DEBUG, cycle->log, 0, "Initialising process");
   /* Initialise the sagittarius VM */
   Sg_Init();
 
-  sagittarius_nginx_symbol = SG_INTERN("(sagittarius nginx)");
-  sagittarius_nginx_library = Sg_FindLibrary(sagittarius_nginx_symbol, FALSE);
+  sym = SG_INTERN("(sagittarius nginx internal)");
+  lib = Sg_FindLibrary(sym, TRUE);
+  
   Sg_InitStaticClassWithMeta(SG_CLASS_NGINX_REQUEST, UC("<nginx-request>"),
-			     SG_LIBRARY(sagittarius_nginx_library), NULL,
+			     SG_LIBRARY(lib), NULL,
 			     SG_FALSE, nr_slots, 0);
   Sg_InitStaticClassWithMeta(SG_CLASS_NGINX_RESPONSE, UC("<nginx-response>"),
-			     SG_LIBRARY(sagittarius_nginx_library), NULL,
+			     SG_LIBRARY(lib), NULL,
 			     SG_FALSE, nres_slots, 0);
-  
-  Sg_InsertBinding(SG_LIBRARY(sagittarius_nginx_library),
+  Sg_InitStaticClass(SG_CLASS_RESPONSE_OUTPUT_PORT, UC("<nginx-response-port>"),
+		     SG_LIBRARY(lib), NULL, 0);
+ 
+  Sg_InsertBinding(SG_LIBRARY(lib),
 		   SG_INTERN("nginx-request?"), &nginx_request_p_stub);
   SG_PROCEDURE_NAME(&nginx_request_p_stub) = SG_MAKE_STRING("nginx-request?");
   SG_PROCEDURE_TRANSPARENT(&nginx_request_p_stub) = SG_PROC_TRANSPARENT;
 
-  Sg_InsertBinding(SG_LIBRARY(sagittarius_nginx_library),
+  Sg_InsertBinding(SG_LIBRARY(lib),
 		   SG_INTERN("nginx-response?"), &nginx_response_p_stub);
   SG_PROCEDURE_NAME(&nginx_response_p_stub) = SG_MAKE_STRING("nginx-response?");
   SG_PROCEDURE_TRANSPARENT(&nginx_response_p_stub) = SG_PROC_TRANSPARENT;
 
 #define INSERT_ACCESSOR(name, cname)					\
   do {									\
-    Sg_InsertBinding(SG_LIBRARY(sagittarius_nginx_library),		\
-		     SG_INTERN(name),					\
+    Sg_InsertBinding(SG_LIBRARY(lib), SG_INTERN(name),			\
 		     &SG_CPP_CAT(cname, _stub));			\
     SG_PROCEDURE_NAME(&SG_CPP_CAT(cname, _stub)) = SG_MAKE_STRING(name); \
     SG_PROCEDURE_TRANSPARENT(&SG_CPP_CAT(cname, _stub)) =		\
@@ -243,9 +409,16 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   INSERT_ACCESSOR("nginx-response-headers", nginx_response_headers);
   INSERT_ACCESSOR("nginx-response-output-port", nginx_response_output_port);
 #undef INSERT_ACCESSOR
-  
-  o = Sg_FindBinding(sagittarius_nginx_library,
-		     SG_INTERN("nginx-dispatch-request"), SG_UNBOUND);
+
+  SG_INIT_CONDITION(SG_CLASS_NGINX_ERROR, lib,
+		    "&nginx-error", nginx_error_slots);
+  SG_INIT_CONDITION_PRED(SG_CLASS_NGINX_ERROR, lib, "nginx-error?");
+  SG_INIT_CONDITION_CTR(SG_CLASS_NGINX_ERROR, lib, "make-nginx-error", 1);
+  SG_INIT_CONDITION_ACC(nginx_error_status, lib, "&nginx-error-status");
+
+  sym = SG_INTERN("(sagittarius nginx)");
+  lib = Sg_FindLibrary(sym, FALSE);
+  o = Sg_FindBinding(lib, SG_INTERN("nginx-dispatch-request"), SG_UNBOUND);
   if (SG_UNBOUNDP(o)) {
     return NGX_ERROR;
   }
@@ -263,7 +436,8 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 
   ngx_log_debug(NGX_LOG_DEBUG, cf->log, 0,
 		"Handling Sagittarius configuration");
-  clcf = (ngx_http_core_loc_conf_t *)ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+  clcf = (ngx_http_core_loc_conf_t *)
+    ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
   clcf->handler = ngx_http_sagittarius_handler;
   
   return NGX_CONF_OK;
@@ -284,7 +458,7 @@ static SgObject make_nginx_response(ngx_http_request_t *req)
   SgNginxResponse *ngxRes = SG_NEW(SgNginxResponse);
   SG_SET_CLASS(ngxRes, SG_CLASS_NGINX_RESPONSE);
   ngxRes->headers = SG_NIL;	/* TODO */
-  ngxRes->out = SG_FALSE;	/* TODO */
+  ngxRes->out = make_response_output_port(req);
   return SG_OBJ(ngxRes);
 }
 
@@ -292,10 +466,10 @@ static SgObject make_nginx_response(ngx_http_request_t *req)
 /* Main handler */
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 {
-  SgObject req, uri, resp, status;
-  ngx_int_t     rc;
-  ngx_buf_t    *b;
-  ngx_chain_t   out;
+  SgObject req, uri, resp;
+  volatile SgObject status;
+  ngx_int_t rc;
+  ngx_chain_t *out;
 
   ngx_log_debug(NGX_LOG_DEBUG, r->connection->log, 0,
 		"Handling Sagittarius request for %s.", r->uri.data);
@@ -308,8 +482,14 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 
   uri = Sg_Utf8sToUtf32s((const char *)r->uri.data, r->uri.len);
   req = make_nginx_request(r);
-  resp = make_nginx_response(r);  
-  status = Sg_Apply3(nginx_dispatch, uri, req, resp);
+  resp = make_nginx_response(r);
+  SG_UNWIND_PROTECT {
+    status = Sg_Apply3(nginx_dispatch, uri, req, resp);
+  } SG_WHEN_ERROR {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "Failed to execute nginx-dispatch");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;    
+  } SG_END_PROTECT;
 
   if (SG_INTP(status)) {
     /* convert Scheme response to C response */
@@ -323,23 +503,8 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
       return rc;
     }
-
-    b = (ngx_buf_t *)ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
-    if (b == NULL) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		    "Failed to allocate response buffer.");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    out.buf = b;
-    out.next = NULL;
-
-    b->pos = (unsigned char *)"OK";
-    b->last = (unsigned char *)(((uintptr_t)b->pos) + 2);
-    b->memory = 1;
-    b->last_buf = 1;
-  
-    return ngx_http_output_filter(r, &out);  
+    out = SG_RESPONSE_OUTPUT_PORT_BUFFER(SG_NGINX_RESPONSE(resp));
+    return ngx_http_output_filter(r, out);
   } else {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "Scheme program returned non fixnum.");

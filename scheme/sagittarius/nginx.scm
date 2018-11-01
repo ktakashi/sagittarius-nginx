@@ -2,12 +2,14 @@
 ;; See Licence.txt for terms and conditions of use
 
 #!nounbound
+#!read-macro=sagittarius/bv-string
 (library (sagittarius nginx)
     (export nginx-dispatch-request)
-    (import (rnrs))
+    (import (rnrs)
+	    (sagittarius nginx internal))
 
 (define (nginx-dispatch-request uri request response)
-  (display "Hooray! It worked!!" (current-error-port))
-  (newline (current-error-port))
+  (put-bytevector (nginx-response-output-port response)
+		  #*"Hooray! It worked!!\n")
   404)
 )
