@@ -18,9 +18,9 @@
 */
 /* 
 The configuration looks like this
-sagittarius {
+sagittarius $entry-point{
   load_path foo/bar /baz/; # up to n path (haven't decided the number...)
-  entry_point "(your web library)" procedure;
+  library "(your web library)";
 }
  */
 typedef struct {
@@ -35,13 +35,14 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 static char* ngx_http_sagittarius(ngx_conf_t *cf,
 				  ngx_command_t *dummy,
 				  void *conf);
+static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf);
 
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle);
 
 static ngx_command_t ngx_http_sagittarius_commands[] = {
   {
     ngx_string("sagittarius"),
-    NGX_HTTP_LOC_CONF | NGX_CONF_BLOCK | NGX_CONF_NOARGS,
+    NGX_HTTP_LOC_CONF | NGX_CONF_BLOCK | NGX_CONF_TAKE1,
     ngx_http_sagittarius_block,
     NGX_HTTP_LOC_CONF_OFFSET,
     0,
@@ -56,7 +57,7 @@ static ngx_http_module_t ngx_http_sagittarius_module_ctx = {
   NULL, 			/* init main configuration */
   NULL,				/* create server configuration */
   NULL,				/* merge server configuration */
-  NULL,				/* create location configuration */
+  ngx_http_sagittarius_create_loc_conf,	/* create location configuration */
   NULL				/* merge location configuration */
 };
 
@@ -450,26 +451,27 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 					void *conf)
 {
   char                        *rv;
-  ngx_http_core_loc_conf_t    *clcf;
   ngx_conf_t                   save;
+  ngx_str_t                   *value;
+  ngx_http_core_loc_conf_t    *clcf;
   ngx_http_sagittarius_conf_t *sg_conf;
-
   ngx_log_debug(NGX_LOG_DEBUG, cf->log, 0,
 		"Handling Sagittarius configuration");
-  sg_conf = (ngx_http_sagittarius_conf_t *)
-    ngx_palloc(cf->pool, sizeof(ngx_http_sagittarius_conf_t));
-  /* parse block conf */
+
+  value = cf->args->elts;
+  sg_conf = (ngx_http_sagittarius_conf_t *)conf;
+  sg_conf->procedure = (ngx_str_t)value[1];
+  
+  /* TODO parse block conf */
   save = *cf;
-  cf->ctx = sg_conf;
   cf->handler = ngx_http_sagittarius;
   cf->handler_conf = conf;
   rv = ngx_conf_parse(cf, NULL);
   *cf = save;
-
+  
   if (rv != NGX_CONF_OK) {
     return NGX_CONF_ERROR;
   }
-
   
   clcf = (ngx_http_core_loc_conf_t *)
     ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
@@ -482,7 +484,29 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 				  ngx_command_t *dummy,
 				  void *conf)
 {
+  ngx_uint_t i;
+  ngx_http_sagittarius_conf_t *sg_conf;
+  ngx_str_t *value = cf->args->elts;
+
+  sg_conf = (ngx_http_sagittarius_conf_t *)conf;
+
+  for (i = 0; i < cf->args->nelts; i++) {
+    ngx_str_t s = value[i];
+    ngx_log_error(NGX_LOG_ERR, cf->log, 0, "'sagittarius' v %V", &s);
+  }
+
   return NGX_CONF_OK;
+}
+
+static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf)
+{
+  ngx_http_sagittarius_conf_t *conf;
+  conf = (ngx_http_sagittarius_conf_t *)
+    ngx_palloc(cf->pool, sizeof(ngx_http_sagittarius_conf_t));
+  if (!conf) {
+    return NGX_CONF_ERROR;
+  }
+  return conf;
 }
 
 static SgObject make_nginx_request(ngx_http_request_t *req)
