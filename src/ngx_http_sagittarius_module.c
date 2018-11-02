@@ -16,9 +16,24 @@
    - https://www.evanmiller.org/nginx-modules-guide.html
    - https://www.nginx.com/resources/wiki/extending/api/
 */
+/* 
+The configuration looks like this
+sagittarius {
+  load_path foo/bar /baz/; # up to n path (haven't decided the number...)
+  entry_point "(your web library)" procedure;
+}
+ */
+typedef struct {
+  ngx_array_t load_paths;	/* array of ngx_str_t */
+  ngx_str_t library;		/* webapp library */
+  ngx_str_t procedure;		/* entry point */
+} ngx_http_sagittarius_conf_t;
 
+static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
+					ngx_command_t *cmd,
+					void *conf);
 static char* ngx_http_sagittarius(ngx_conf_t *cf,
-				  ngx_command_t *cmd,
+				  ngx_command_t *dummy,
 				  void *conf);
 
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle);
@@ -26,8 +41,8 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle);
 static ngx_command_t ngx_http_sagittarius_commands[] = {
   {
     ngx_string("sagittarius"),
-    NGX_HTTP_LOC_CONF | NGX_CONF_NOARGS,
-    ngx_http_sagittarius,
+    NGX_HTTP_LOC_CONF | NGX_CONF_BLOCK | NGX_CONF_NOARGS,
+    ngx_http_sagittarius_block,
     NGX_HTTP_LOC_CONF_OFFSET,
     0,
     NULL
@@ -296,6 +311,8 @@ static void allocate_buffer(SgObject self, ngx_chain_t *parent)
   ngx_http_request_t *r = SG_RESPONSE_OUTPUT_PORT_REQUEST(self);
   ngx_chain_t *c = (ngx_chain_t *)ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
   ngx_buf_t *b = (ngx_buf_t *)ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+  ngx_log_debug(NGX_LOG_DEBUG, r->connection->log, 0,
+		"Allocating response buffer");
   if (c == NULL || b == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "Failed to allocate response buffer.");
@@ -428,18 +445,43 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 }
 
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r);
-static char* ngx_http_sagittarius(ngx_conf_t *cf,
-				  ngx_command_t *cmd,
-				  void *conf)
+static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
+					ngx_command_t *cmd,
+					void *conf)
 {
-  ngx_http_core_loc_conf_t  *clcf;
+  char                        *rv;
+  ngx_http_core_loc_conf_t    *clcf;
+  ngx_conf_t                   save;
+  ngx_http_sagittarius_conf_t *sg_conf;
 
   ngx_log_debug(NGX_LOG_DEBUG, cf->log, 0,
 		"Handling Sagittarius configuration");
+  sg_conf = (ngx_http_sagittarius_conf_t *)
+    ngx_palloc(cf->pool, sizeof(ngx_http_sagittarius_conf_t));
+  /* parse block conf */
+  save = *cf;
+  cf->ctx = sg_conf;
+  cf->handler = ngx_http_sagittarius;
+  cf->handler_conf = conf;
+  rv = ngx_conf_parse(cf, NULL);
+  *cf = save;
+
+  if (rv != NGX_CONF_OK) {
+    return NGX_CONF_ERROR;
+  }
+
+  
   clcf = (ngx_http_core_loc_conf_t *)
     ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
   clcf->handler = ngx_http_sagittarius_handler;
   
+  return NGX_CONF_OK;
+}
+
+static char* ngx_http_sagittarius(ngx_conf_t *cf,
+				  ngx_command_t *dummy,
+				  void *conf)
+{
   return NGX_CONF_OK;
 }
 
