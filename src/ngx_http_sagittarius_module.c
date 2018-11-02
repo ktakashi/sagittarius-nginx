@@ -494,6 +494,11 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
   if (rv != NGX_CONF_OK) {
     return NGX_CONF_ERROR;
   }
+  if (sg_conf->library.len == 0) {
+    ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		  "'sagittarius': 'library' must be specified");
+    return NGX_CONF_ERROR;
+  }
   
   clcf = (ngx_http_core_loc_conf_t *)
     ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
@@ -553,12 +558,16 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 
 static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf)
 {
+  ngx_str_t nstr = ngx_null_string;
   ngx_http_sagittarius_conf_t *conf;
   conf = (ngx_http_sagittarius_conf_t *)
     ngx_palloc(cf->pool, sizeof(ngx_http_sagittarius_conf_t));
   if (!conf) {
     return NGX_CONF_ERROR;
   }
+  conf->library = nstr;
+  conf->procedure = nstr;
+  conf->load_paths = NULL;
   return conf;
 }
 
