@@ -314,6 +314,7 @@ static void allocate_buffer(SgObject self, ngx_chain_t *parent)
   ngx_http_request_t *r = SG_RESPONSE_OUTPUT_PORT_REQUEST(self);
   ngx_chain_t *c = (ngx_chain_t *)ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
   ngx_buf_t *b = (ngx_buf_t *)ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
 		"Allocating response buffer");
   if (c == NULL || b == NULL) {
@@ -326,15 +327,17 @@ static void allocate_buffer(SgObject self, ngx_chain_t *parent)
 		      SG_NIL);
   }
   /* maybe we can use nginx allocator? */
-  b->start = b->pos = b->last = SG_NEW_ATOMIC2(unsigned char *, BUFFER_SIZE);
-  b->end = b->start + BUFFER_SIZE;
-  b->last_buf = 1;		/* may be reset later*/
+  b->pos = b->last = SG_NEW_ATOMIC2(unsigned char *, BUFFER_SIZE);
+  b->last_buf = 1;		/* may be reset later */
+  b->memory = 1;
   c->buf = b;
   c->next = NULL;
   if (parent) {
     parent->next = c;
   }
   SG_RESPONSE_OUTPUT_PORT_BUFFER(self) = c;
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "%d bytes allocated",
+		BUFFER_SIZE);
 }
 
 static int64_t response_out_put_u8_array(SgObject self, uint8_t *ba,
@@ -342,18 +345,21 @@ static int64_t response_out_put_u8_array(SgObject self, uint8_t *ba,
 {
   int64_t written;
   ngx_buf_t *buf;		/*  current buffer */
+  unsigned char *be;
+  
   if (!SG_RESPONSE_OUTPUT_PORT_BUFFER(self)) {
     allocate_buffer(self, NULL);
     SG_RESPONSE_OUTPUT_PORT_ROOT(self) = SG_RESPONSE_OUTPUT_PORT_BUFFER(self);
   }
   buf = SG_RESPONSE_OUTPUT_PORT_BUFFER(self)->buf;
+  be = buf->last + BUFFER_SIZE;
   for (written = 0; written < size; written++) {
-    if (buf->pos == buf->end) {
+    if (buf->last == be) {
       buf->last_buf = 0;
       allocate_buffer(self, SG_RESPONSE_OUTPUT_PORT_BUFFER(self));
       buf = SG_RESPONSE_OUTPUT_PORT_BUFFER(self)->buf;
     }
-    *buf->pos++ = *ba++;
+    *buf->last++ = *ba++;
   }
   return written;
 }
@@ -609,11 +615,6 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 		"Handling Sagittarius request for %s.", r->uri.data);
 
   /* TODO call initialiser with configuration in location */
-  /* TODO convert body to input port... */
-  rc = ngx_http_discard_request_body(r);
-  if (rc != NGX_OK && rc != NGX_AGAIN) {
-    return rc;
-  }
 
   uri = Sg_Utf8sToUtf32s((const char *)r->uri.data, r->uri.len);
   req = make_nginx_request(r);
@@ -622,11 +623,21 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     status = Sg_Apply3(nginx_dispatch, uri, req, resp);
   } SG_WHEN_ERROR {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		  "Failed to execute nginx-dispatch");
+		  "Failed to execute nginx-dispatch-request");
+    ngx_http_discard_request_body(r);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;    
   } SG_END_PROTECT;
 
+  /* The procedure didn't consume the request, so discard it */
+  rc = ngx_http_discard_request_body(r);
+  if (rc != NGX_OK && rc != NGX_AGAIN) {
+    return rc;
+  }
+  
   if (SG_INTP(status)) {
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		  "Returned status is %d.", SG_INT_VALUE(status));
+
     /* convert Scheme response to C response */
     /* TODO do it above... */
     r->headers_out.status = SG_INT_VALUE(status);
@@ -638,7 +649,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
       return rc;
     }
-    out = SG_RESPONSE_OUTPUT_PORT_BUFFER(SG_NGINX_RESPONSE(resp));
+    out = SG_RESPONSE_OUTPUT_PORT_BUFFER(SG_NGINX_RESPONSE(resp)->out);
     return ngx_http_output_filter(r, out);
   } else {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
