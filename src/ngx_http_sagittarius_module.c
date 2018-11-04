@@ -22,6 +22,10 @@ sagittarius $entry-point{
   load_path foo/bar /baz/; # up to n path (haven't decided the number...)
   library "(your web library)";
 }
+
+We do not use SgObject here. I'm not sure when the configuration parsing 
+happens and the initialisation of Sagittarius happens on the creation of
+worker process.
  */
 typedef struct {
   ngx_array_t *load_paths;	/* array of ngx_str_t */
@@ -523,12 +527,6 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
   
   sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   value = cf->args->elts;
-
-  ngx_log_error(NGX_LOG_DEBUG, cf->log, 0,
-		"'sagittarius': n=%d", cf->args->nelts);
-  for (i = 0; i < cf->args->nelts; i++) {
-    ngx_log_error(NGX_LOG_DEBUG, cf->log, 0, "'sagittarius': %V", &value[i]);
-  }
 
   if (ngx_strcmp(value[0].data, "load_path") == 0) {
     if (cf->args->nelts < 2) {
