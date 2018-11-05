@@ -2,7 +2,6 @@
 ;; See Licence.txt for terms and conditions of use
 
 #!nounbound
-#!read-macro=sagittarius/bv-string
 (library (sagittarius nginx)
     (export nginx-dispatch-request
 	    *nginx:response-output-port*)
@@ -16,6 +15,9 @@
   (parameterize ((*nginx:response-output-port*
 		  (nginx-response-output-port response)))
     (let-values (((status content-type . headers) (procedure uri)))
+      (cond  ((string? content-type) (nginx-response-content-type-set! response content-type))
+	     ((symbol? content-type)
+	      (nginx-response-content-type-set! response (symbol->string content-type))))
       ;; add content type and headers here
       status)))
 )

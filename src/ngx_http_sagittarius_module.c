@@ -113,8 +113,8 @@ static SgObject nr_body(SgNginxRequest *nr)
 }
 
 static SgSlotAccessor nr_slots[] = {
-  SG_CLASS_SLOT_SPEC("headers", 0, nr_headers, NULL),
-  SG_CLASS_SLOT_SPEC("body",    1, nr_body, NULL),
+  SG_CLASS_SLOT_SPEC("headers",    0, nr_headers, NULL),
+  SG_CLASS_SLOT_SPEC("input-port", 1, nr_body, NULL),
   { { NULL } }
 };
 
@@ -164,7 +164,7 @@ static SG_DEFINE_SUBR(nginx_request_p_stub, 1, 0, nginx_request_p,
 SG_DEFINE_GETTER("nginx-request-headers", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_headers, SG_NGINX_REQUEST,
 		 nginx_request_headers);
-SG_DEFINE_GETTER("nginx-request-body", "nginx-request",
+SG_DEFINE_GETTER("nginx-request-input-port", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_body, SG_NGINX_REQUEST,
 		 nginx_request_body);
 
@@ -173,6 +173,7 @@ typedef struct SgNginxResponseRec
   SG_HEADER;
   SgObject headers;
   SgObject out;			/* will be an output port */
+  ngx_http_request_t *request;
 } SgNginxResponse;
 SG_CLASS_DECL(Sg_NginxResponseClass);
 #define SG_CLASS_NGINX_RESPONSE (&Sg_NginxResponseClass)
@@ -186,6 +187,28 @@ static void nginx_response_printer(SgObject self, SgPort *port,
 }
 SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_NginxResponseClass, nginx_response_printer);
 
+#define ngx_str_to_string(s) Sg_Utf8sToUtf32s((const char *)(s)->data, (s)->len)
+
+static SgObject nres_content_type(SgNginxResponse *nr)
+{
+  /* TODO cache? */
+  ngx_str_t *s = &nr->request->headers_out.content_type;
+  return ngx_str_to_string(s);
+}
+
+static void nres_content_type_set(SgNginxResponse *nr, SgObject v)
+{
+  char *r;
+  if (!SG_STRINGP(v)) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-content-type-set!"), SG_INTERN("string"),
+				    v, SG_NIL);
+  }
+  r = Sg_Utf32sToUtf8s(v);
+  nr->request->headers_out.content_type.len = ngx_strlen(r);
+  nr->request->headers_out.content_type.data = (unsigned char *)r;
+}
+
+
 static SgObject nres_headers(SgNginxResponse *nr)
 {
   return nr->headers;
@@ -196,8 +219,9 @@ static SgObject nres_out(SgNginxResponse *nr)
 }
 
 static SgSlotAccessor nres_slots[] = {
-  SG_CLASS_SLOT_SPEC("headers",     1, nres_headers, NULL),
-  SG_CLASS_SLOT_SPEC("output-port", 2, nres_out, NULL),
+  SG_CLASS_SLOT_SPEC("content-type", 1, nres_content_type, nres_content_type_set),
+  SG_CLASS_SLOT_SPEC("headers",      2, nres_headers, NULL),
+  SG_CLASS_SLOT_SPEC("output-port",  3, nres_out, NULL),
   { { NULL } }
 };
 
@@ -212,6 +236,12 @@ static SgObject nginx_response_p(SgObject *argv, int argc, void *data)
 static SG_DEFINE_SUBR(nginx_response_p_stub, 1, 0, nginx_response_p,
 		      SG_FALSE, NULL);
 
+SG_DEFINE_GETTER("nginx-response-content-type", "nginx-response",
+		 SG_NGINX_RESPONSEP, nres_content_type, SG_NGINX_RESPONSE,
+		 nginx_response_content_type);
+SG_DEFINE_SETTER("nginx-response-content-type-set!", "nginx-response",
+		 SG_NGINX_RESPONSEP, nres_content_type_set, SG_NGINX_RESPONSE,
+		 nginx_response_content_type_set);
 SG_DEFINE_GETTER("nginx-response-headers", "nginx-response",
 		 SG_NGINX_RESPONSEP, nres_headers, SG_NGINX_RESPONSE,
 		 nginx_response_headers);
@@ -428,20 +458,22 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   SG_PROCEDURE_NAME(&nginx_response_p_stub) = SG_MAKE_STRING("nginx-response?");
   SG_PROCEDURE_TRANSPARENT(&nginx_response_p_stub) = SG_PROC_TRANSPARENT;
 
-#define INSERT_ACCESSOR(name, cname)					\
+#define INSERT_ACCESSOR(name, cname, effect)				\
   do {									\
     Sg_InsertBinding(SG_LIBRARY(lib), SG_INTERN(name),			\
 		     &SG_CPP_CAT(cname, _stub));			\
     SG_PROCEDURE_NAME(&SG_CPP_CAT(cname, _stub)) = SG_MAKE_STRING(name); \
-    SG_PROCEDURE_TRANSPARENT(&SG_CPP_CAT(cname, _stub)) =		\
-      SG_PROC_NO_SIDE_EFFECT;						\
+    SG_PROCEDURE_TRANSPARENT(&SG_CPP_CAT(cname, _stub)) = effect;	\
   } while (0)
 
-  INSERT_ACCESSOR("nginx-request-headers", nginx_request_headers);
-  INSERT_ACCESSOR("nginx-request-body", nginx_request_body);
+  INSERT_ACCESSOR("nginx-request-headers", nginx_request_headers, SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body, SG_PROC_NO_SIDE_EFFECT);
 
-  INSERT_ACCESSOR("nginx-response-headers", nginx_response_headers);
-  INSERT_ACCESSOR("nginx-response-output-port", nginx_response_output_port);
+  INSERT_ACCESSOR("nginx-response-content-type", nginx_response_content_type, SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-response-content-type-set!", nginx_response_content_type_set,
+		  SG_SUBR_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-response-headers", nginx_response_headers, SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-response-output-port", nginx_response_output_port, SG_PROC_NO_SIDE_EFFECT);
 #undef INSERT_ACCESSOR
 
   SG_INIT_CONDITION(SG_CLASS_NGINX_ERROR, lib,
@@ -590,24 +622,91 @@ static SgObject make_nginx_response(ngx_http_request_t *req)
   SG_SET_CLASS(ngxRes, SG_CLASS_NGINX_RESPONSE);
   ngxRes->headers = SG_NIL;	/* TODO */
   ngxRes->out = make_response_output_port(req);
+  ngxRes->request = req;
+  req->headers_out.content_type.len = sizeof("application/octet-stream") - 1;
+  req->headers_out.content_type.data = (u_char *) "application/octet-stream";
+  
   return SG_OBJ(ngxRes);
 }
 
-#define ngx_str_to_string(s) Sg_Utf8sToUtf32s((const char *)(s)->data, (s)->len)
+static ngx_int_t init_base_library(ngx_log_t *log);
+static SgObject setup_load_path(volatile SgVM *vm,
+				ngx_log_t *log,
+				ngx_http_sagittarius_conf_t *sg_conf);
+static SgObject retrieve_procedure(ngx_log_t *log, ngx_http_sagittarius_conf_t *sg_conf);
 
-static SgObject make_load_paths(ngx_log_t *log,
-				ngx_http_sagittarius_conf_t *conf)
+
+/* Main handler */
+static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 {
-  SgObject h = SG_NIL, t = SG_NIL;
-  ngx_uint_t i;
-  ngx_str_t *value = conf->load_paths->elts;
-  for (i = 0; i < conf->load_paths->nelts; i++) {
-    ngx_str_t *s = &value[i];
-    ngx_log_error(NGX_LOG_DEBUG, log, 0,
-		  "'sagittarius': load path: %V", s);
-    SG_APPEND1(h, t, ngx_str_to_string(s));
+  SgObject req, uri, resp, saved_loadpath, proc;
+  volatile SgVM *vm;
+  volatile SgObject status;
+  ngx_int_t rc;
+  ngx_chain_t *out;
+  ngx_http_sagittarius_conf_t *sg_conf;
+  
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		"'sagittarius': Handling Sagittarius request for %s.",
+		r->uri.data);
+  sg_conf = (ngx_http_sagittarius_conf_t *)
+    ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
+  vm = Sg_VM();
+  saved_loadpath = setup_load_path(vm, r->connection->log, sg_conf);
+  if (SG_UNDEFP(nginx_dispatch)) {
+    if (init_base_library(r->connection->log) != NGX_OK) {
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
   }
-  return h;
+  proc = retrieve_procedure(r->connection->log, sg_conf);
+  if (!SG_PROCEDUREP(proc)) {
+    return NGX_HTTP_NOT_FOUND;
+  }
+  
+  /* TODO call initialiser with configuration in location */
+  uri = ngx_str_to_string(&r->uri);
+  req = make_nginx_request(r);
+  resp = make_nginx_response(r);
+  SG_UNWIND_PROTECT {
+    status = Sg_Apply4(nginx_dispatch, proc, uri, req, resp);
+  } SG_WHEN_ERROR {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "'sagittarius': Failed to execute nginx-dispatch-request");
+    vm->loadPath = saved_loadpath;
+    ngx_http_discard_request_body(r);
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;    
+  } SG_END_PROTECT;
+
+  vm->loadPath = saved_loadpath;
+    
+  /* The procedure didn't consume the request, so discard it */
+  rc = ngx_http_discard_request_body(r);
+  if (rc != NGX_OK && rc != NGX_AGAIN) {
+    return rc;
+  }
+  
+  if (SG_INTP(status)) {
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		  "'sagittarius': Returned status is %d, content-type is '%V'.",
+		  SG_INT_VALUE(status),
+		  &r->headers_out.content_type);
+
+    /* convert Scheme response to C response */
+    /* TODO do it above... */
+    r->headers_out.status = SG_INT_VALUE(status);
+
+    rc = ngx_http_send_header(r);
+  
+    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+      return rc;
+    }
+    out = SG_RESPONSE_OUTPUT_PORT_BUFFER(SG_NGINX_RESPONSE(resp)->out);
+    return ngx_http_output_filter(r, out);
+  } else {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "'sagittarius': Scheme program returned non fixnum.");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
 }
 
 static ngx_int_t init_base_library(ngx_log_t *log)
@@ -637,96 +736,54 @@ static ngx_int_t init_base_library(ngx_log_t *log)
   return NGX_OK;
 }
 
-
-/* Main handler */
-static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
+static SgObject make_load_paths(ngx_log_t *log,
+				ngx_http_sagittarius_conf_t *conf)
 {
-  SgObject req, uri, resp, load_paths, saved_loadpath, cp, lib, proc;
-  volatile SgVM *vm;
-  volatile SgObject status;
-  ngx_int_t rc;
-  ngx_chain_t *out;
-  ngx_http_sagittarius_conf_t *sg_conf;
-  
-  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"'sagittarius': Handling Sagittarius request for %s.",
-		r->uri.data);
-  vm = Sg_VM();
-  saved_loadpath = vm->loadPath;
+  SgObject h = SG_NIL, t = SG_NIL;
+  ngx_uint_t i;
+  ngx_str_t *value = conf->load_paths->elts;
+  for (i = 0; i < conf->load_paths->nelts; i++) {
+    ngx_str_t *s = &value[i];
+    ngx_log_error(NGX_LOG_DEBUG, log, 0,
+		  "'sagittarius': load path: %V", s);
+    SG_APPEND1(h, t, ngx_str_to_string(s));
+  }
+  return h;
+}
 
-  sg_conf = (ngx_http_sagittarius_conf_t *)
-    ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
+static SgObject setup_load_path(volatile SgVM *vm,
+				ngx_log_t *log,
+				ngx_http_sagittarius_conf_t *sg_conf)
+{
+  SgObject saved_loadpath = vm->loadPath;
+  SgObject load_paths = make_load_paths(log, sg_conf);
+  SgObject cp;
   
-  load_paths = make_load_paths(r->connection->log, sg_conf);
   SG_FOR_EACH(cp, load_paths) {
     /* we prepend the load path */
     Sg_AddLoadPath(SG_STRING(SG_CAR(cp)), FALSE);
   }
-  if (SG_UNDEFP(nginx_dispatch)) {
-    if (init_base_library(r->connection->log) != NGX_OK) {
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-  }
+  return saved_loadpath;
+}
+
+static SgObject retrieve_procedure(ngx_log_t *log, ngx_http_sagittarius_conf_t *sg_conf)
+{
+  SgObject lib, proc;
   lib = Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&sg_conf->library)), FALSE);
   if (SG_FALSEP(lib)) {
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+    ngx_log_error(NGX_LOG_ERR, log, 0,
 		  "'sagittarius': Web application library '%V' not found.",
 		  &sg_conf->library);
-    return NGX_HTTP_NOT_FOUND;
+    return SG_FALSE;
   }
   proc = Sg_FindBinding(SG_LIBRARY(lib),
 			Sg_Intern(ngx_str_to_string(&sg_conf->procedure)),
 			SG_UNBOUND);
   if (SG_UNBOUNDP(proc)) {
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+    ngx_log_error(NGX_LOG_ERR, log, 0,
 		  "'sagittarius': Web application procedure '%V' not found.",
 		  &sg_conf->procedure);
-    return NGX_HTTP_NOT_FOUND;
+    return SG_FALSE;
   }
-  proc = SG_GLOC_GET(SG_GLOC(proc));
-
-  /* TODO call initialiser with configuration in location */
-  uri = ngx_str_to_string(&r->uri);
-  req = make_nginx_request(r);
-  resp = make_nginx_response(r);
-  SG_UNWIND_PROTECT {
-    status = Sg_Apply4(nginx_dispatch, proc, uri, req, resp);
-  } SG_WHEN_ERROR {
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		  "'sagittarius': Failed to execute nginx-dispatch-request");
-    vm->loadPath = saved_loadpath;
-    ngx_http_discard_request_body(r);
-    return NGX_HTTP_INTERNAL_SERVER_ERROR;    
-  } SG_END_PROTECT;
-  vm->loadPath = saved_loadpath;
-    
-  /* The procedure didn't consume the request, so discard it */
-  rc = ngx_http_discard_request_body(r);
-  if (rc != NGX_OK && rc != NGX_AGAIN) {
-    return rc;
-  }
-  
-  if (SG_INTP(status)) {
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "'sagittarius': Returned status is %d.",
-		  SG_INT_VALUE(status));
-
-    /* convert Scheme response to C response */
-    /* TODO do it above... */
-    r->headers_out.status = SG_INT_VALUE(status);
-    r->headers_out.content_type.len = sizeof("text/plain") - 1;
-    r->headers_out.content_type.data = (u_char *) "text/plain";
-
-    rc = ngx_http_send_header(r);
-  
-    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
-      return rc;
-    }
-    out = SG_RESPONSE_OUTPUT_PORT_BUFFER(SG_NGINX_RESPONSE(resp)->out);
-    return ngx_http_output_filter(r, out);
-  } else {
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		  "'sagittarius': Scheme program returned non fixnum.");
-    return NGX_HTTP_INTERNAL_SERVER_ERROR;
-  }
+  return SG_GLOC_GET(SG_GLOC(proc));
 }
