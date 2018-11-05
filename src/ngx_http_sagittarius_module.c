@@ -320,12 +320,12 @@ static void allocate_buffer(SgObject self, ngx_chain_t *parent)
   ngx_buf_t *b = (ngx_buf_t *)ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
 
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"Allocating response buffer");
+		"'sagittarius': Allocating response buffer");
   if (c == NULL || b == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		  "Failed to allocate response buffer.");
+		  "'sagittarius': Failed to allocate response buffer.");
     raise_nginx_error(SG_INTERN("put-u8"),
-		      SG_MAKE_STRING("[Internal]"
+		      SG_MAKE_STRING("'sagittarius': [Internal]"
 				     " Failed to allocate response buffer"),
 		      Sg_MakeNginxError(NGX_HTTP_INTERNAL_SERVER_ERROR),
 		      SG_NIL);
@@ -340,8 +340,8 @@ static void allocate_buffer(SgObject self, ngx_chain_t *parent)
     parent->next = c;
   }
   SG_RESPONSE_OUTPUT_PORT_BUFFER(self) = c;
-  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "%d bytes allocated",
-		BUFFER_SIZE);
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		"'sagittarius': %d bytes allocated", BUFFER_SIZE);
 }
 
 static int64_t response_out_put_u8_array(SgObject self, uint8_t *ba,
@@ -397,14 +397,15 @@ static SgObject make_response_output_port(ngx_http_request_t *request)
 static SgObject nginx_dispatch = SG_UNDEF;
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 {
-  SgObject sym, lib, o;
+  SgObject sym, lib;
   ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
-		"Initialising Sagittarius process");
+		"'sagittarius': Initialising Sagittarius process");
   /* Initialise the sagittarius VM */
   Sg_Init();
 
   sym = SG_INTERN("(sagittarius nginx internal)");
   ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
+		"'sagittarius': "
 		"Initialising '(sagittarius nginx internal)' library");
   lib = Sg_FindLibrary(sym, TRUE);
 
@@ -450,28 +451,8 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   SG_INIT_CONDITION_ACC(nginx_error_status, lib, "&nginx-error-status");
 
   ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
+		"'sagittarius': "
 		"'(sagittarius nginx internal)' library is initialised");
-
-  ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
-		"Initialising '(sagittarius nginx)' library");
-  sym = SG_INTERN("(sagittarius nginx)");
-  lib = Sg_FindLibrary(sym, FALSE);
-  if (SG_FALSEP(lib)) {
-    ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
-		  "Failed to find '(sagittarius nginx)' library");
-    return NGX_ERROR;
-  }
-  ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
-		"Retrieving nginx-dispatch-request");
-  o = Sg_FindBinding(lib, SG_INTERN("nginx-dispatch-request"), SG_UNBOUND);
-  if (SG_UNBOUNDP(o)) {
-    ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
-		  "Failed to retrieve nginx-dispatch-request");
-    return NGX_ERROR;
-  }
-  nginx_dispatch = SG_GLOC_GET(SG_GLOC(o));
-  ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
-		"'(sagittarius nginx)' library is initialised");
   return NGX_OK;
 }
 
@@ -523,7 +504,7 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 {
   ngx_uint_t i;
   ngx_http_sagittarius_conf_t *sg_conf;
-  ngx_str_t *value;
+  ngx_str_t *value, *elts, *prefix;
   
   sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   value = cf->args->elts;
@@ -535,14 +516,26 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 		    "'load_path' must take at least one argument");
       return NGX_CONF_ERROR;
     }
-    sg_conf->load_paths = ngx_array_create(cf->pool, cf->args->nelts-1,
-					   sizeof(ngx_str_t));
-    for (i = 0; i < cf->args->nelts - 1; i++) {
+    if (!sg_conf->load_paths) {
+      sg_conf->load_paths = ngx_array_create(cf->pool, 0, sizeof(ngx_str_t));
+    }
+    prefix = &cf->cycle->prefix;
+    elts = ngx_array_push_n(sg_conf->load_paths, cf->args->nelts-1);
+
+    for (i = 0; i < cf->args->nelts-1; i++) {
       ngx_str_t *s, *v;
-      v = &value[i];
-      s = ngx_array_push(sg_conf->load_paths);
+      v = &value[i+1];
+      s = elts+i;
       s->data = v->data;
       s->len = v->len;
+      if (ngx_get_full_name(cf->pool, prefix, s) != NGX_OK) {
+	ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		      "'sagittarius': 'load_path' failed to get load path ");
+	return NGX_CONF_ERROR;
+      }
+      ngx_log_error(NGX_LOG_DEBUG, cf->log, 0,
+		    "'sagittarius': 'load_path' %V", s);
+
     }
   } else if (ngx_strcmp(value[0].data, "library") == 0) {
     if (cf->args->nelts != 2) {
@@ -600,32 +593,103 @@ static SgObject make_nginx_response(ngx_http_request_t *req)
   return SG_OBJ(ngxRes);
 }
 
+#define ngx_str_to_string(s) Sg_Utf8sToUtf32s((const char *)(s)->data, (s)->len)
+
+static SgObject make_load_paths(ngx_log_t *log,
+				ngx_http_sagittarius_conf_t *conf)
+{
+  SgObject h = SG_NIL, t = SG_NIL;
+  ngx_uint_t i;
+  ngx_str_t *value = conf->load_paths->elts;
+  for (i = 0; i < conf->load_paths->nelts; i++) {
+    ngx_str_t *s = &value[i];
+    ngx_log_error(NGX_LOG_DEBUG, log, 0,
+		  "'sagittarius': load path: %V", s);
+    SG_APPEND1(h, t, ngx_str_to_string(s));
+  }
+  return h;
+}
+
+static ngx_int_t init_base_library(ngx_log_t *log)
+{
+  SgObject sym, lib, o;
+  ngx_log_error(NGX_LOG_DEBUG, log, 0,
+		"'sagittarius': Initialising '(sagittarius nginx)' library");
+  sym = SG_INTERN("(sagittarius nginx)");
+  lib = Sg_FindLibrary(sym, FALSE);
+  if (SG_FALSEP(lib)) {
+    ngx_log_error(NGX_LOG_ERR, log, 0,
+		  "'sagittarius': "
+		  "Failed to find '(sagittarius nginx)' library");
+    return NGX_ERROR;
+  }
+  ngx_log_error(NGX_LOG_DEBUG, log, 0,
+		"'sagittarius': Retrieving nginx-dispatch-request");
+  o = Sg_FindBinding(lib, SG_INTERN("nginx-dispatch-request"), SG_UNBOUND);
+  if (SG_UNBOUNDP(o)) {
+    ngx_log_error(NGX_LOG_ERR, log, 0,
+		  "'sagittarius': Failed to retrieve nginx-dispatch-request");
+    return NGX_ERROR;
+  }
+  nginx_dispatch = SG_GLOC_GET(SG_GLOC(o));
+  ngx_log_error(NGX_LOG_DEBUG, log, 0,
+		"'sagittarius': '(sagittarius nginx)' library is initialised");
+  return NGX_OK;
+}
+
 
 /* Main handler */
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 {
-  SgObject req, uri, resp;
+  SgObject req, uri, resp, load_paths, saved_loadpath, cp, lib;
+  volatile SgVM *vm;
   volatile SgObject status;
   ngx_int_t rc;
   ngx_chain_t *out;
-
+  ngx_http_sagittarius_conf_t *sg_conf;
+  
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"Handling Sagittarius request for %s.", r->uri.data);
+		"'sagittarius': Handling Sagittarius request for %s.",
+		r->uri.data);
+  vm = Sg_VM();
+  saved_loadpath = vm->loadPath;
 
+  sg_conf = (ngx_http_sagittarius_conf_t *)
+    ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
+  
+  load_paths = make_load_paths(r->connection->log, sg_conf);
+  SG_FOR_EACH(cp, load_paths) {
+    /* we prepend the load path */
+    Sg_AddLoadPath(SG_STRING(SG_CAR(cp)), FALSE);
+  }
+  if (SG_UNDEFP(nginx_dispatch)) {
+    if (init_base_library(r->connection->log) != NGX_OK) {
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+  }
+  lib = Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&sg_conf->library)), FALSE);
+  if (SG_FALSEP(lib)) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "'sagittarius': Web application library '%V' not found.",
+		  &sg_conf->library);
+    /* return internal server error */
+  }
+  
   /* TODO call initialiser with configuration in location */
-
-  uri = Sg_Utf8sToUtf32s((const char *)r->uri.data, r->uri.len);
+  uri = ngx_str_to_string(&r->uri);
   req = make_nginx_request(r);
   resp = make_nginx_response(r);
   SG_UNWIND_PROTECT {
     status = Sg_Apply3(nginx_dispatch, uri, req, resp);
   } SG_WHEN_ERROR {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		  "Failed to execute nginx-dispatch-request");
+		  "'sagittarius': Failed to execute nginx-dispatch-request");
+    vm->loadPath = saved_loadpath;
     ngx_http_discard_request_body(r);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;    
   } SG_END_PROTECT;
-
+  vm->loadPath = saved_loadpath;
+    
   /* The procedure didn't consume the request, so discard it */
   rc = ngx_http_discard_request_body(r);
   if (rc != NGX_OK && rc != NGX_AGAIN) {
@@ -634,7 +698,8 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   
   if (SG_INTP(status)) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "Returned status is %d.", SG_INT_VALUE(status));
+		  "'sagittarius': Returned status is %d.",
+		  SG_INT_VALUE(status));
 
     /* convert Scheme response to C response */
     /* TODO do it above... */
@@ -651,7 +716,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     return ngx_http_output_filter(r, out);
   } else {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		  "Scheme program returned non fixnum.");
+		  "'sagittarius': Scheme program returned non fixnum.");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 }

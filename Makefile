@@ -39,7 +39,7 @@ install-nginx:
 
 # nginx doesn't provide uninstall target. sad...
 uninstall:
-	$(RM) $(DESTDIR)$(SAGITTARIUS_SITELIB)/sagittarius
+	$(RM) $(DESTDIR)$(SAGITTARIUS_SITELIB)/sagittarius/nginx.scm
 
 run:
 	$(MAKE) -C build run
