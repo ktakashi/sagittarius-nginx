@@ -4,15 +4,18 @@
 #!nounbound
 #!read-macro=sagittarius/bv-string
 (library (sagittarius nginx)
-    (export nginx-dispatch-request)
+    (export nginx-dispatch-request
+	    *nginx:response-output-port*)
     (import (rnrs)
 	    (sagittarius)
-	    (sagittarius nginx internal))
+	    (sagittarius nginx internal)
+	    (srfi :39 parameters))
 
-(define (nginx-dispatch-request uri request response)
-  (let ((out (transcoded-port (nginx-response-output-port response)
-			      (native-transcoder))))
-    (display (load-path) out) (newline out)
-    (display "Hooray!!" out) (newline out)
-    404))
+(define *nginx:response-output-port* (make-parameter #f))
+(define (nginx-dispatch-request procedure uri request response)
+  (parameterize ((*nginx:response-output-port*
+		  (nginx-response-output-port response)))
+    (let-values (((status content-type . headers) (procedure uri)))
+      ;; add content type and headers here
+      status)))
 )

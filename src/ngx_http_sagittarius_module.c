@@ -641,7 +641,7 @@ static ngx_int_t init_base_library(ngx_log_t *log)
 /* Main handler */
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 {
-  SgObject req, uri, resp, load_paths, saved_loadpath, cp, lib;
+  SgObject req, uri, resp, load_paths, saved_loadpath, cp, lib, proc;
   volatile SgVM *vm;
   volatile SgObject status;
   ngx_int_t rc;
@@ -672,15 +672,25 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Web application library '%V' not found.",
 		  &sg_conf->library);
-    /* return internal server error */
+    return NGX_HTTP_NOT_FOUND;
   }
-  
+  proc = Sg_FindBinding(SG_LIBRARY(lib),
+			Sg_Intern(ngx_str_to_string(&sg_conf->procedure)),
+			SG_UNBOUND);
+  if (SG_UNBOUNDP(proc)) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "'sagittarius': Web application procedure '%V' not found.",
+		  &sg_conf->procedure);
+    return NGX_HTTP_NOT_FOUND;
+  }
+  proc = SG_GLOC_GET(SG_GLOC(proc));
+
   /* TODO call initialiser with configuration in location */
   uri = ngx_str_to_string(&r->uri);
   req = make_nginx_request(r);
   resp = make_nginx_response(r);
   SG_UNWIND_PROTECT {
-    status = Sg_Apply3(nginx_dispatch, uri, req, resp);
+    status = Sg_Apply4(nginx_dispatch, proc, uri, req, resp);
   } SG_WHEN_ERROR {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Failed to execute nginx-dispatch-request");
