@@ -466,14 +466,19 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
     SG_PROCEDURE_TRANSPARENT(&SG_CPP_CAT(cname, _stub)) = effect;	\
   } while (0)
 
-  INSERT_ACCESSOR("nginx-request-headers", nginx_request_headers, SG_PROC_NO_SIDE_EFFECT);
-  INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body, SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-headers", nginx_request_headers,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body,
+		  SG_PROC_NO_SIDE_EFFECT);
 
-  INSERT_ACCESSOR("nginx-response-content-type", nginx_response_content_type, SG_PROC_NO_SIDE_EFFECT);
-  INSERT_ACCESSOR("nginx-response-content-type-set!", nginx_response_content_type_set,
-		  SG_SUBR_SIDE_EFFECT);
-  INSERT_ACCESSOR("nginx-response-headers", nginx_response_headers, SG_PROC_NO_SIDE_EFFECT);
-  INSERT_ACCESSOR("nginx-response-output-port", nginx_response_output_port, SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-response-content-type", nginx_response_content_type,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-response-content-type-set!",
+		  nginx_response_content_type_set, SG_SUBR_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-response-headers", nginx_response_headers,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-response-output-port", nginx_response_output_port,
+		  SG_PROC_NO_SIDE_EFFECT);
 #undef INSERT_ACCESSOR
 
   SG_INIT_CONDITION(SG_CLASS_NGINX_ERROR, lib,
@@ -633,8 +638,9 @@ static ngx_int_t init_base_library(ngx_log_t *log);
 static SgObject setup_load_path(volatile SgVM *vm,
 				ngx_log_t *log,
 				ngx_http_sagittarius_conf_t *sg_conf);
-static SgObject retrieve_procedure(ngx_log_t *log, ngx_http_sagittarius_conf_t *sg_conf);
-
+static SgObject retrieve_procedure(ngx_log_t *log,
+				   ngx_http_sagittarius_conf_t *sg_conf);
+static off_t compute_content_length(ngx_chain_t *out);
 
 /* Main handler */
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
@@ -692,16 +698,20 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 		  &r->headers_out.content_type);
 
     /* convert Scheme response to C response */
-    /* TODO do it above... */
+    out = SG_RESPONSE_OUTPUT_PORT_BUFFER(SG_NGINX_RESPONSE(resp)->out);
     r->headers_out.status = SG_INT_VALUE(status);
+    r->headers_out.content_length_n = compute_content_length(out);
 
     rc = ngx_http_send_header(r);
   
     if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
       return rc;
     }
-    out = SG_RESPONSE_OUTPUT_PORT_BUFFER(SG_NGINX_RESPONSE(resp)->out);
-    return ngx_http_output_filter(r, out);
+    if (out) {
+      return ngx_http_output_filter(r, out);
+    } else {
+      return NGX_OK;
+    }
   } else {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Scheme program returned non fixnum.");
@@ -786,4 +796,20 @@ static SgObject retrieve_procedure(ngx_log_t *log, ngx_http_sagittarius_conf_t *
     return SG_FALSE;
   }
   return SG_GLOC_GET(SG_GLOC(proc));
+}
+
+static off_t compute_content_length(ngx_chain_t *out)
+{
+  ngx_chain_t *c;
+  off_t count;
+
+  if (!out) return 0;
+
+  count = 0;
+  for (c = out; c; c= c->next) {
+    ngx_buf_t *buf = c->buf;
+    unsigned char *cb = buf->pos;
+    while (cb++ != buf->last) count++;
+  }
+  return count;
 }
