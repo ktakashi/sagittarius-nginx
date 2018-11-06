@@ -3,21 +3,20 @@
 
 #!nounbound
 (library (sagittarius nginx)
-    (export nginx-dispatch-request
-	    *nginx:response-output-port*)
+    (export nginx-response-output-port)
     (import (rnrs)
-	    (sagittarius)
-	    (sagittarius nginx internal)
-	    (srfi :39 parameters))
+	    (sagittarius nginx internal))
 
-(define *nginx:response-output-port* (make-parameter #f))
+
 (define (nginx-dispatch-request procedure uri request response)
-  (parameterize ((*nginx:response-output-port*
-		  (nginx-response-output-port response)))
-    (let-values (((status content-type . headers) (procedure uri)))
-      (cond  ((string? content-type) (nginx-response-content-type-set! response content-type))
-	     ((symbol? content-type)
-	      (nginx-response-content-type-set! response (symbol->string content-type))))
-      ;; add content type and headers here
-      status)))
+  (define (->contnet-type-string content-type)
+    (cond  ((string? content-type) content-type)
+	   ((symbol? content-type) (symbol->string content-type))
+	   (else #f)))
+
+  (let-values (((status content-type . headers) (procedure request response)))
+    (cond  ((->contnet-type-string content-type) =>
+	    (lambda (ctype) (nginx-response-content-type-set! response ctype))))
+    ;; add content type and headers here
+    status))
 )
