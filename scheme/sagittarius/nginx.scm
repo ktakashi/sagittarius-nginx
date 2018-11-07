@@ -3,7 +3,32 @@
 
 #!nounbound
 (library (sagittarius nginx)
-    (export nginx-response-output-port)
+    (export nginx-request-host
+	    nginx-request-connection
+	    nginx-request-if-modified-since
+	    nginx-request-if-unmodified-since
+	    nginx-request-if-match
+	    nginx-request-if-none-match
+	    nginx-request-user-agent
+	    nginx-request-referer
+	    nginx-request-content-length
+	    nginx-request-content-range
+	    nginx-request-content-type
+	    nginx-request-range
+	    nginx-request-if-range
+	    nginx-request-transfer-encoding
+	    nginx-request-te
+	    nginx-request-expect
+	    nginx-request-upgrade
+	    nginx-request-accept-encoding
+	    nginx-request-via
+	    nginx-request-authorization
+	    nginx-request-keep-alive
+	    nginx-request-accept
+	    nginx-request-accept-language
+
+	    nginx-response-output-port
+	    )
     (import (rnrs)
 	    (sagittarius nginx internal))
 

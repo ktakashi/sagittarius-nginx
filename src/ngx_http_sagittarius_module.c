@@ -82,6 +82,7 @@ ngx_module_t ngx_http_sagittarius_module = {
   NGX_MODULE_V1_PADDING
 };
 
+#define ngx_str_to_string(s) Sg_Utf8sToUtf32s((const char *)(s)->data, (s)->len)
 
 typedef struct SgNginxRequestRec
 {
@@ -112,9 +113,23 @@ static SgObject nr_body(SgNginxRequest *nr)
   return nr->body;
 }
 
+#define HEADER_FIELD(name, cname, n)					\
+  static SgObject SG_CPP_CAT(nr_, cname)(SgNginxRequest *nr)		\
+  {									\
+    ngx_table_elt_t *e = nr->rawNginxRequest->headers_in. cname;	\
+    if (e->value.len == 0 || e->value.data == NULL) return SG_FALSE;	\
+    return ngx_str_to_string(&e->value);				\
+  }
+#include "builtin_request_fields.inc"
+#undef HEADER_FIELD
+
 static SgSlotAccessor nr_slots[] = {
   SG_CLASS_SLOT_SPEC("headers",    0, nr_headers, NULL),
   SG_CLASS_SLOT_SPEC("input-port", 1, nr_body, NULL),
+#define HEADER_FIELD(name, cname, n)		\
+  SG_CLASS_SLOT_SPEC(#name, n+1, SG_CPP_CAT(nr_, cname), NULL),
+#include "builtin_request_fields.inc"
+#undef HEADER_FIELD
   { { NULL } }
 };
 
@@ -167,6 +182,14 @@ SG_DEFINE_GETTER("nginx-request-headers", "nginx-request",
 SG_DEFINE_GETTER("nginx-request-input-port", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_body, SG_NGINX_REQUEST,
 		 nginx_request_body);
+#define HEADER_FIELD(name, cname, n)					\
+  SG_DEFINE_GETTER("nginx-request-"#name, "nginx-request",		\
+		   SG_NGINX_REQUESTP, SG_CPP_CAT(nr_, cname),		\
+		   SG_NGINX_REQUEST,					\
+		   SG_CPP_CAT(nginx_request_, cname));
+#include "builtin_request_fields.inc"
+#undef HEADER_FIELD
+
 
 typedef struct SgNginxResponseRec
 {
@@ -186,8 +209,6 @@ static void nginx_response_printer(SgObject self, SgPort *port,
   Sg_Putuz(port, UC("#<nginx-response>"));
 }
 SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_NginxResponseClass, nginx_response_printer);
-
-#define ngx_str_to_string(s) Sg_Utf8sToUtf32s((const char *)(s)->data, (s)->len)
 
 static SgObject nres_content_type(SgNginxResponse *nr)
 {
@@ -470,7 +491,12 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body,
 		  SG_PROC_NO_SIDE_EFFECT);
-
+#define HEADER_FIELD(name, cname, n)		\
+  INSERT_ACCESSOR("nginx-request-" #name, SG_CPP_CAT(nginx_request_, cname), \
+		  SG_PROC_NO_SIDE_EFFECT);
+#include "builtin_request_fields.inc"
+#undef HEADER_FIELD
+  
   INSERT_ACCESSOR("nginx-response-content-type", nginx_response_content_type,
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-response-content-type-set!",
@@ -479,6 +505,7 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-response-output-port", nginx_response_output_port,
 		  SG_PROC_NO_SIDE_EFFECT);
+
 #undef INSERT_ACCESSOR
 
   SG_INIT_CONDITION(SG_CLASS_NGINX_ERROR, lib,

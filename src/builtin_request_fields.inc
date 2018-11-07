@@ -1,0 +1,27 @@
+/* -*- mode:c -*-
+ * Copyright (c) 2018 Takashi Kato <ktakashi@ymail.com>
+ * See Licence.txt for terms and conditions of use
+ */
+HEADER_FIELD(host,                host,                1)
+HEADER_FIELD(connection,          connection,          2)
+HEADER_FIELD(if-modified-since,   if_modified_since,   3)
+HEADER_FIELD(if-unmodified-since, if_unmodified_since, 4)
+HEADER_FIELD(if-match,            if_match,            5)
+HEADER_FIELD(if-none-match,       if_none_match,       6)
+HEADER_FIELD(user-agent,          user_agent,          7)
+HEADER_FIELD(referer,             referer,             8)
+HEADER_FIELD(content-length,      content_length,      9)
+HEADER_FIELD(content-range,       content_range,       10)
+HEADER_FIELD(content-type,        content_type,        11)
+HEADER_FIELD(range,               range,               12)
+HEADER_FIELD(if-range,            if_range,            13)
+HEADER_FIELD(transfer-encoding,   transfer_encoding,   14)
+HEADER_FIELD(te,                  te,                  15)
+HEADER_FIELD(expect,              expect,              16)
+HEADER_FIELD(upgrade,             upgrade,             17)
+HEADER_FIELD(accept-encoding,     accept_encoding,     18)
+HEADER_FIELD(via,                 via,                 19)
+HEADER_FIELD(authorization,       authorization,       20)
+HEADER_FIELD(keep-alive,          keep_alive,          21)
+HEADER_FIELD(accept,              accept,              22)
+HEADER_FIELD(accept-language,     accept_language,     23)
