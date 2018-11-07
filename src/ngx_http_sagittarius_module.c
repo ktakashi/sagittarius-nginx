@@ -106,6 +106,29 @@ SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_NginxRequestClass, nginx_request_printer);
 
 static SgObject nr_headers(SgNginxRequest *nr)
 {
+  if (SG_FALSEP(nr->headers)) {
+    SgObject h = SG_NIL, t = SG_NIL;
+    ngx_uint_t i;
+    ngx_list_t *headers = &nr->rawNginxRequest->headers_in.headers;
+    ngx_list_part_t *part = &headers->part;
+    ngx_table_elt_t *data = part->elts;
+    for (i = 0;; i++) {
+      ngx_table_elt_t *e;
+      SgObject k, v, o;
+      if (i >= part->nelts) {
+	if (part->next == NULL) break;
+	part = part->next;
+	data = part->elts;
+	i = 0;
+      }
+      e = &data[i];
+      k = ngx_str_to_string(&e->key);
+      v = ngx_str_to_string(&e->value);
+      o = SG_LIST2(k, v);
+      SG_APPEND1(h, t, o);
+    }
+    nr->headers = h;
+  }
   return nr->headers;
 }
 static SgObject nr_body(SgNginxRequest *nr)
@@ -642,7 +665,7 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
 {
   SgNginxRequest *ngxReq = SG_NEW(SgNginxRequest);
   SG_SET_CLASS(ngxReq, SG_CLASS_NGINX_REQUEST);
-  ngxReq->headers = SG_NIL;	/* TODO */
+  ngxReq->headers = SG_FALSE;
   ngxReq->body = SG_FALSE;	/* TODO */
   ngxReq->rawNginxRequest = req;
   return SG_OBJ(ngxReq);
