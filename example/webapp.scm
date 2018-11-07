@@ -9,7 +9,7 @@
 			       (native-transcoder)))
   (put-string out "Test web application!!\n")
   (put-string out (nginx-request-user-agent request)) (newline out)
-  ;; (display (nginx-request-connection request)) (newline)
+  (display (nginx-request-connection request) out) (newline out)
   (values 200 'text/plain))
 
 )

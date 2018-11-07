@@ -117,7 +117,7 @@ static SgObject nr_body(SgNginxRequest *nr)
   static SgObject SG_CPP_CAT(nr_, cname)(SgNginxRequest *nr)		\
   {									\
     ngx_table_elt_t *e = nr->rawNginxRequest->headers_in. cname;	\
-    if (e->value.len == 0 || e->value.data == NULL) return SG_FALSE;	\
+    if (e == NULL) return SG_FALSE;					\
     return ngx_str_to_string(&e->value);				\
   }
 #include "builtin_request_fields.inc"
