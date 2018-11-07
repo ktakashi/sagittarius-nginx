@@ -90,6 +90,7 @@ typedef struct SgNginxRequestRec
   SgObject headers;
   SgObject body;		/* will be a input port */
   ngx_http_request_t *rawNginxRequest;
+  /* TODO maybe cache the builtin values? */
 } SgNginxRequest;
 SG_CLASS_DECL(Sg_NginxRequestClass);
 #define SG_CLASS_NGINX_REQUEST (&Sg_NginxRequestClass)
