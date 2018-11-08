@@ -353,7 +353,74 @@ static void raise_nginx_error(SgObject who, SgObject msg,
   Sg_Raise(sc, FALSE);
 }
 
-typedef struct SgResponseOutputPortRec
+/* Ports */
+static SgClass *port_cpl[] = {
+  SG_CLASS_PORT,
+  SG_CLASS_TOP,
+  NULL
+};
+
+/* close (common for now) */
+static int port_close(SgObject self)
+{
+  SG_PORT(self)->closed = SG_PORT_CLOSED;
+  return TRUE;
+}
+
+/* request input port */
+typedef struct
+{
+  SgPort              parent;
+  ngx_http_request_t *request;
+} SgRequestInputPort;
+SG_CLASS_DECL(Sg_RequestInputPortClass);
+SG_DEFINE_BUILTIN_CLASS(Sg_RequestInputPortClass, Sg_DefaultPortPrinter,
+			NULL, NULL, NULL, port_cpl);
+#define SG_CLASS_REQUEST_INPUT_PORT (&Sg_RequestInputPortClass)
+#define SG_REQUEST_INPUT_PORT(obj) ((SgRequestInputPort *)obj)
+#define SG_REQUEST_INPUT_PORTP(obj) SG_XTYPEP(obj, SG_CLASS_REQUEST_INPUT_PORT)
+
+#define request_in_close port_close
+
+static int64_t request_in_read_u8(SgObject self, uint8_t *buf, int64_t size)
+{
+  /* TBD */
+  return 0;
+}
+
+static int64_t request_in_read_u8_all(SgObject self, uint8_t **buf)
+{
+  /* TBD */
+  return 0;
+}
+
+static SgPortTable request_in_table = {
+  NULL,				/* no flush */
+  request_in_close,
+  NULL,				/* no ready */
+  NULL,				/* lock */
+  NULL,				/* unlock */
+  NULL,				/* position (should we?) */
+  NULL,				/* set position (should we?) */
+  NULL,				/* open (not used?)*/
+  request_in_read_u8,		/* read u8 */
+  request_in_read_u8_all,	/* read all */
+  NULL,				/* put array */
+  NULL,				/* read str */
+  NULL,				/* write str */
+};
+
+static SgObject make_request_input_port(ngx_http_request_t *request)
+{
+  SgRequestInputPort *port = SG_NEW(SgRequestInputPort);
+  SG_INIT_PORT(port, SG_CLASS_REQUEST_INPUT_PORT, SG_INPUT_PORT,
+	       &request_in_table, SG_FALSE);
+  port->request = request;
+  return SG_OBJ(port);
+}
+
+/* response output port */
+typedef struct
 {
   SgPort              parent;
   ngx_chain_t        *root;
@@ -362,15 +429,11 @@ typedef struct SgResponseOutputPortRec
 } SgResponseOutputPort;
 
 SG_CLASS_DECL(Sg_ResponseOutputPortClass);
-static SgClass *port_cpl[] = {
-  SG_CLASS_PORT,
-  SG_CLASS_TOP,
-  NULL
-};
+
 SG_DEFINE_BUILTIN_CLASS(Sg_ResponseOutputPortClass, Sg_DefaultPortPrinter,
 			NULL, NULL, NULL, port_cpl);
 #define SG_CLASS_RESPONSE_OUTPUT_PORT (&Sg_ResponseOutputPortClass)
-#define SG_RESPONSE_OUTPUT_PORT(obj)  ((SgResponseOutputPort*)obj)
+#define SG_RESPONSE_OUTPUT_PORT(obj)  ((SgResponseOutputPort *)obj)
 #define SG_RESPONSE_OUTPUT_PORTP(obj)		\
   SG_XTYPEP(obj, SG_CLASS_RESPONSE_OUTPUT_PORT)
 #define SG_RESPONSE_OUTPUT_PORT_ROOT(obj)	\
@@ -381,12 +444,6 @@ SG_DEFINE_BUILTIN_CLASS(Sg_ResponseOutputPortClass, Sg_DefaultPortPrinter,
   (SG_RESPONSE_OUTPUT_PORT(obj)->request)
 
 #define BUFFER_SIZE SG_PORT_DEFAULT_BUFFER_SIZE
-
-static int response_out_close(SgObject self)
-{
-  SG_PORT(self)->closed = SG_PORT_CLOSED;
-  return TRUE;
-}
 
 static void allocate_buffer(SgObject self, ngx_chain_t *parent)
 {
@@ -442,6 +499,8 @@ static int64_t response_out_put_u8_array(SgObject self, uint8_t *ba,
   }
   return written;
 }
+
+#define response_out_close port_close
 
 static SgPortTable response_out_table = {
   NULL,				/* no flush */
@@ -667,7 +726,7 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
   SgNginxRequest *ngxReq = SG_NEW(SgNginxRequest);
   SG_SET_CLASS(ngxReq, SG_CLASS_NGINX_REQUEST);
   ngxReq->headers = SG_FALSE;
-  ngxReq->body = SG_FALSE;	/* TODO */
+  ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
   return SG_OBJ(ngxReq);
 }
@@ -827,7 +886,8 @@ static SgObject setup_load_path(volatile SgVM *vm,
   return saved_loadpath;
 }
 
-static SgObject retrieve_procedure(ngx_log_t *log, ngx_http_sagittarius_conf_t *sg_conf)
+static SgObject retrieve_procedure(ngx_log_t *log,
+				   ngx_http_sagittarius_conf_t *sg_conf)
 {
   SgObject lib, proc;
   lib = Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&sg_conf->library)), FALSE);
@@ -858,9 +918,7 @@ static off_t compute_content_length(ngx_chain_t *out)
 
   count = 0;
   for (c = out; c; c= c->next) {
-    ngx_buf_t *buf = c->buf;
-    unsigned char *cb = buf->pos;
-    while (cb++ != buf->last) count++;
+    count += ngx_buf_size(c->buf);
   }
   return count;
 }
