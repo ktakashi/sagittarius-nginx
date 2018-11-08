@@ -27,6 +27,7 @@
 	    nginx-request-accept
 	    nginx-request-accept-language
 	    nginx-request-headers ;; alist
+	    nginx-request-input-port
 
 	    nginx-response-output-port
 	    )

@@ -12,6 +12,7 @@
   (put-string out (nginx-request-user-agent request)) (newline out)
   (display (nginx-request-connection request) out) (newline out)
   (pp (nginx-request-headers request) out)
+  (pp (get-bytevector-all (nginx-request-input-port request))  out)
   (values 200 'text/plain))
 
 )

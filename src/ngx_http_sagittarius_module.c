@@ -83,6 +83,7 @@ ngx_module_t ngx_http_sagittarius_module = {
 };
 
 #define ngx_str_to_string(s) Sg_Utf8sToUtf32s((const char *)(s)->data, (s)->len)
+#define BUFFER_SIZE SG_PORT_DEFAULT_BUFFER_SIZE
 
 typedef struct SgNginxRequestRec
 {
@@ -360,7 +361,7 @@ static SgClass *port_cpl[] = {
   NULL
 };
 
-/* close (common for now) */
+/* close */
 static int port_close(SgObject self)
 {
   SG_PORT(self)->closed = SG_PORT_CLOSED;
@@ -372,6 +373,9 @@ typedef struct
 {
   SgPort              parent;
   ngx_http_request_t *request;
+  ngx_chain_t        *current_chain;
+  unsigned char      *current_buffer;
+  SgObject            temp_inp;
 } SgRequestInputPort;
 SG_CLASS_DECL(Sg_RequestInputPortClass);
 SG_DEFINE_BUILTIN_CLASS(Sg_RequestInputPortClass, Sg_DefaultPortPrinter,
@@ -380,18 +384,100 @@ SG_DEFINE_BUILTIN_CLASS(Sg_RequestInputPortClass, Sg_DefaultPortPrinter,
 #define SG_REQUEST_INPUT_PORT(obj) ((SgRequestInputPort *)obj)
 #define SG_REQUEST_INPUT_PORTP(obj) SG_XTYPEP(obj, SG_CLASS_REQUEST_INPUT_PORT)
 
-#define request_in_close port_close
-
+static int request_in_close(SgObject self)
+{
+  SgRequestInputPort *port = SG_REQUEST_INPUT_PORT(self);
+  port_close(self);
+  if (!SG_PORTP(port->temp_inp)) {
+    Sg_ClosePort(port->temp_inp);
+  }
+  return TRUE;
+}
+/* 
+   handling request body:
+   http://nginx.org/en/docs/dev/development_guide.html#http_request_body
+ */
 static int64_t request_in_read_u8(SgObject self, uint8_t *buf, int64_t size)
 {
-  /* TBD */
-  return 0;
+  SgRequestInputPort *port = SG_REQUEST_INPUT_PORT(self);
+  ngx_http_request_t *r = port->request;
+  int64_t read = 0;
+  
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		"'sagittarius': request_body %p", r->request_body);
+
+  if (SG_UNDEFP(port->temp_inp)) {
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		  "'sagittarius': reading from buffer %p",
+		  r->request_body->bufs);
+    if (port->current_chain == NULL) {
+      port->current_chain = r->request_body->bufs;
+      if (port->current_chain) {
+	port->current_buffer = port->current_chain->buf->pos;
+      }
+    }
+    if (port->current_buffer) {
+      for (; read < size; read++) {
+	if (port->current_buffer == port->current_chain->buf->last) {
+	  if (!port->current_chain->buf->last_buf) {
+	    port->current_chain = port->current_chain->next;
+	    port->current_buffer = port->current_chain->buf->pos;
+	  } else {
+	    break;
+	  }
+	}
+	buf[read] = *port->current_buffer++;
+      }
+    }
+  }
+  if (read != size) {
+    if (SG_UNDEFP(port->temp_inp)) {
+      if (r->request_body->temp_file) {
+	SgObject file;
+	/* open file input port */
+	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		      "'sagittarius': temp file %V",
+		      &r->request_body->temp_file->path->name);
+	file = Sg_MakeFileFromFD(r->request_body->temp_file->file.fd);
+	port->temp_inp =
+	  Sg_MakeFileBinaryInputPort(SG_FILE(file), SG_BUFFER_MODE_BLOCK);
+      } else {
+	port->temp_inp = SG_FALSE;
+      }
+    }
+    if (!SG_FALSEP(port->temp_inp)) {
+      /* 
+	 it's safe to do this since the owner port is locked.
+	 we don't check if the input is exhausted or not here.
+       */
+      read += Sg_ReadbUnsafe(SG_PORT(port->temp_inp), buf+read, size-read);
+    }
+  }
+  return read;
 }
 
 static int64_t request_in_read_u8_all(SgObject self, uint8_t **buf)
 {
-  /* TBD */
-  return 0;
+  uint8_t b[BUFFER_SIZE];
+  SgPort *buffer = NULL;
+  SgBytePort byp;
+  int64_t r = 0, c;
+  
+  while (1) {
+    c = request_in_read_u8(self, b, BUFFER_SIZE);
+    if (buffer == NULL && c > 0) {
+      buffer = SG_PORT(Sg_InitByteArrayOutputPort(&byp, BUFFER_SIZE));
+    }
+    if (buffer) {
+      Sg_WritebUnsafe(buffer, b, 0, c);
+    }
+    r += c;
+    if (c != BUFFER_SIZE) break;
+  }
+  if (buffer) {
+    *buf = Sg_GetByteArrayFromBinaryPort(&byp);
+  }
+  return r;
 }
 
 static SgPortTable request_in_table = {
@@ -416,6 +502,9 @@ static SgObject make_request_input_port(ngx_http_request_t *request)
   SG_INIT_PORT(port, SG_CLASS_REQUEST_INPUT_PORT, SG_INPUT_PORT,
 	       &request_in_table, SG_FALSE);
   port->request = request;
+  port->current_chain = NULL;
+  port->current_buffer = NULL;
+  port->temp_inp = SG_UNDEF;
   return SG_OBJ(port);
 }
 
@@ -442,8 +531,6 @@ SG_DEFINE_BUILTIN_CLASS(Sg_ResponseOutputPortClass, Sg_DefaultPortPrinter,
   (SG_RESPONSE_OUTPUT_PORT(obj)->buffer)
 #define SG_RESPONSE_OUTPUT_PORT_REQUEST(obj)	\
   (SG_RESPONSE_OUTPUT_PORT(obj)->request)
-
-#define BUFFER_SIZE SG_PORT_DEFAULT_BUFFER_SIZE
 
 static void allocate_buffer(SgObject self, ngx_chain_t *parent)
 {
@@ -752,6 +839,14 @@ static SgObject retrieve_procedure(ngx_log_t *log,
 				   ngx_http_sagittarius_conf_t *sg_conf);
 static off_t compute_content_length(ngx_chain_t *out);
 
+static void ngx_http_request_body_init(ngx_http_request_t *r)
+{
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		"'sagittarius': request_body is initialised %p",
+		r->request_body);
+  
+}
+
 /* Main handler */
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 {
@@ -777,6 +872,11 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   proc = retrieve_procedure(r->connection->log, sg_conf);
   if (!SG_PROCEDUREP(proc)) {
     return NGX_HTTP_NOT_FOUND;
+  }
+  
+  rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
+  if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
+    return rc;
   }
   
   /* TODO call initialiser with configuration in location */
