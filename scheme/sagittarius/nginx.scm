@@ -3,7 +3,9 @@
 
 #!nounbound
 (library (sagittarius nginx)
-    (export nginx-request-host
+    (export nginx-request-method
+	    nginx-request-uri
+	    nginx-request-host
 	    nginx-request-connection
 	    nginx-request-if-modified-since
 	    nginx-request-if-unmodified-since
@@ -35,7 +37,7 @@
 	    (sagittarius nginx internal))
 
 
-(define (nginx-dispatch-request procedure uri request response)
+(define (nginx-dispatch-request procedure request response)
   (define (->contnet-type-string content-type)
     (cond  ((string? content-type) content-type)
 	   ((symbol? content-type) (symbol->string content-type))

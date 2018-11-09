@@ -88,8 +88,10 @@ ngx_module_t ngx_http_sagittarius_module = {
 typedef struct SgNginxRequestRec
 {
   SG_HEADER;
+  SgObject method;
+  SgObject uri;
   SgObject headers;
-  SgObject body;		/* will be a input port */
+  SgObject body;		/* binary input port */
   ngx_http_request_t *rawNginxRequest;
   /* TODO maybe cache the builtin values? */
 } SgNginxRequest;
@@ -101,8 +103,9 @@ SG_CLASS_DECL(Sg_NginxRequestClass);
 static void nginx_request_printer(SgObject self, SgPort *port,
 				  SgWriteContext *ctx)
 {
-  Sg_Printf(port, UC("#<nginx-request %x>"),
-	    SG_NGINX_REQUEST(self)->rawNginxRequest);
+  Sg_Printf(port, UC("#<nginx-request %A %A>"),
+	    SG_NGINX_REQUEST(self)->method,
+	    SG_NGINX_REQUEST(self)->uri);
 }
 SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_NginxRequestClass, nginx_request_printer);
 
@@ -133,6 +136,16 @@ static SgObject nr_headers(SgNginxRequest *nr)
   }
   return nr->headers;
 }
+static SgObject nr_method(SgNginxRequest *nr)
+{
+  return nr->method;
+}
+
+static SgObject nr_uri(SgNginxRequest *nr)
+{
+  return nr->uri;
+}
+
 static SgObject nr_body(SgNginxRequest *nr)
 {
   return nr->body;
@@ -149,10 +162,12 @@ static SgObject nr_body(SgNginxRequest *nr)
 #undef HEADER_FIELD
 
 static SgSlotAccessor nr_slots[] = {
-  SG_CLASS_SLOT_SPEC("headers",    0, nr_headers, NULL),
-  SG_CLASS_SLOT_SPEC("input-port", 1, nr_body, NULL),
-#define HEADER_FIELD(name, cname, n)		\
-  SG_CLASS_SLOT_SPEC(#name, n+1, SG_CPP_CAT(nr_, cname), NULL),
+  SG_CLASS_SLOT_SPEC("method",     0, nr_method, NULL),
+  SG_CLASS_SLOT_SPEC("uri",        1, nr_uri, NULL),
+  SG_CLASS_SLOT_SPEC("headers",    2, nr_headers, NULL),
+  SG_CLASS_SLOT_SPEC("input-port", 3, nr_body, NULL),
+#define HEADER_FIELD(name, cname, n)				\
+  SG_CLASS_SLOT_SPEC(#name, n+3, SG_CPP_CAT(nr_, cname), NULL),
 #include "builtin_request_fields.inc"
 #undef HEADER_FIELD
   { { NULL } }
@@ -200,7 +215,12 @@ static SG_DEFINE_SUBR(nginx_request_p_stub, 1, 0, nginx_request_p,
   static SG_DEFINE_SUBR(SG_CPP_CAT(cname, _stub), 2, 0, cname,		\
 			SG_FALSE, NULL);
 
-
+SG_DEFINE_GETTER("nginx-request-method", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_method, SG_NGINX_REQUEST,
+		 nginx_request_method);
+SG_DEFINE_GETTER("nginx-request-uri", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_uri, SG_NGINX_REQUEST,
+		 nginx_request_uri);
 SG_DEFINE_GETTER("nginx-request-headers", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_headers, SG_NGINX_REQUEST,
 		 nginx_request_headers);
@@ -654,7 +674,11 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
     SG_PROCEDURE_NAME(&SG_CPP_CAT(cname, _stub)) = SG_MAKE_STRING(name); \
     SG_PROCEDURE_TRANSPARENT(&SG_CPP_CAT(cname, _stub)) = effect;	\
   } while (0)
-
+  
+  INSERT_ACCESSOR("nginx-request-method", nginx_request_method,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-uri", nginx_request_uri,
+		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-headers", nginx_request_headers,
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body,
@@ -810,6 +834,8 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
 {
   SgNginxRequest *ngxReq = SG_NEW(SgNginxRequest);
   SG_SET_CLASS(ngxReq, SG_CLASS_NGINX_REQUEST);
+  ngxReq->method = ngx_str_to_string(&req->method_name);
+  ngxReq->uri = ngx_str_to_string(&req->uri);
   ngxReq->headers = SG_FALSE;
   ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
@@ -848,7 +874,7 @@ static void ngx_http_request_body_init(ngx_http_request_t *r)
 /* Main handler */
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 {
-  SgObject req, uri, resp, saved_loadpath, proc;
+  SgObject req, resp, saved_loadpath, proc;
   volatile SgVM *vm;
   volatile SgObject status;
   ngx_int_t rc;
@@ -856,8 +882,8 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   ngx_http_sagittarius_conf_t *sg_conf;
   
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"'sagittarius': Handling Sagittarius request for %s.",
-		r->uri.data);
+		"'sagittarius': Handling Sagittarius request for %V %V.",
+		&r->method_name, &r->uri);
   sg_conf = (ngx_http_sagittarius_conf_t *)
     ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   vm = Sg_VM();
@@ -884,11 +910,10 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   }
   
   /* TODO call initialiser with configuration in location */
-  uri = ngx_str_to_string(&r->uri);
   req = make_nginx_request(r);
   resp = make_nginx_response(r);
   SG_UNWIND_PROTECT {
-    status = Sg_Apply4(nginx_dispatch, proc, uri, req, resp);
+    status = Sg_Apply3(nginx_dispatch, proc, req, resp);
   } SG_WHEN_ERROR {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Failed to execute nginx-dispatch-request");
