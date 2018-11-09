@@ -3,6 +3,7 @@
     (export run)
     (import (rnrs)
 	    (sagittarius nginx)
+	    (rfc :5322)
 	    (pp))
 
 (define (run request response) 
@@ -13,6 +14,8 @@
   (put-string out (nginx-request-uri request)) (newline out)
   (put-string out (nginx-request-user-agent request)) (newline out)
   (cond ((nginx-request-content-type request) =>
+	 (lambda (v) (put-string out v) (newline out))))
+  (cond ((rfc5322-header-ref (nginx-request-headers request) "accept") =>
 	 (lambda (v) (put-string out v) (newline out))))
   (pp (nginx-request-headers request) out)
   (let ((bv (get-bytevector-all (nginx-request-input-port request))))
