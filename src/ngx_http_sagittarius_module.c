@@ -393,6 +393,7 @@ static int request_in_close(SgObject self)
   }
   return TRUE;
 }
+
 /* 
    handling request body:
    http://nginx.org/en/docs/dev/development_guide.html#http_request_body
@@ -403,19 +404,16 @@ static int64_t request_in_read_u8(SgObject self, uint8_t *buf, int64_t size)
   ngx_http_request_t *r = port->request;
   int64_t read = 0;
   
-  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"'sagittarius': request_body %p", r->request_body);
-
   if (SG_UNDEFP(port->temp_inp)) {
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "'sagittarius': reading from buffer %p",
-		  r->request_body->bufs);
     if (port->current_chain == NULL) {
       port->current_chain = r->request_body->bufs;
       if (port->current_chain) {
 	port->current_buffer = port->current_chain->buf->pos;
       }
     }
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		  "'sagittarius': reading from buffer %p",
+		  port->current_chain);
     if (port->current_buffer) {
       for (; read < size; read++) {
 	if (port->current_buffer == port->current_chain->buf->last) {
@@ -437,7 +435,7 @@ static int64_t request_in_read_u8(SgObject self, uint8_t *buf, int64_t size)
 	/* open file input port */
 	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
 		      "'sagittarius': temp file %V",
-		      &r->request_body->temp_file->path->name);
+		      &r->request_body->temp_file->file.name);
 	file = Sg_MakeFileFromFD(r->request_body->temp_file->file.fd);
 	port->temp_inp =
 	  Sg_MakeFileBinaryInputPort(SG_FILE(file), SG_BUFFER_MODE_BLOCK);
@@ -462,7 +460,7 @@ static int64_t request_in_read_u8_all(SgObject self, uint8_t **buf)
   SgPort *buffer = NULL;
   SgBytePort byp;
   int64_t r = 0, c;
-  
+
   while (1) {
     c = request_in_read_u8(self, b, BUFFER_SIZE);
     if (buffer == NULL && c > 0) {
@@ -532,7 +530,7 @@ SG_DEFINE_BUILTIN_CLASS(Sg_ResponseOutputPortClass, Sg_DefaultPortPrinter,
 #define SG_RESPONSE_OUTPUT_PORT_REQUEST(obj)	\
   (SG_RESPONSE_OUTPUT_PORT(obj)->request)
 
-static void allocate_buffer(SgObject self, ngx_chain_t *parent)
+static void allocate_buffer(SgObject self)
 {
   ngx_http_request_t *r = SG_RESPONSE_OUTPUT_PORT_REQUEST(self);
   ngx_chain_t *c = (ngx_chain_t *)ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
@@ -549,18 +547,18 @@ static void allocate_buffer(SgObject self, ngx_chain_t *parent)
 		      Sg_MakeNginxError(NGX_HTTP_INTERNAL_SERVER_ERROR),
 		      SG_NIL);
   }
-  /* maybe we can use nginx allocator? */
+  /* TODO maybe we can use nginx allocator? */
   b->pos = b->last = SG_NEW_ATOMIC2(unsigned char *, BUFFER_SIZE);
   b->last_buf = 1;		/* may be reset later */
   b->memory = 1;
   c->buf = b;
   c->next = NULL;
-  if (parent) {
-    parent->next = c;
+  if (SG_RESPONSE_OUTPUT_PORT_BUFFER(self)) {
+    SG_RESPONSE_OUTPUT_PORT_BUFFER(self)->next = c;
   }
   SG_RESPONSE_OUTPUT_PORT_BUFFER(self) = c;
-  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"'sagittarius': %d bytes allocated", BUFFER_SIZE);
+  /* ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, */
+  /* 		"'sagittarius': %d bytes allocated", BUFFER_SIZE); */
 }
 
 static int64_t response_out_put_u8_array(SgObject self, uint8_t *ba,
@@ -571,15 +569,15 @@ static int64_t response_out_put_u8_array(SgObject self, uint8_t *ba,
   unsigned char *be;
   
   if (!SG_RESPONSE_OUTPUT_PORT_BUFFER(self)) {
-    allocate_buffer(self, NULL);
+    allocate_buffer(self);
     SG_RESPONSE_OUTPUT_PORT_ROOT(self) = SG_RESPONSE_OUTPUT_PORT_BUFFER(self);
   }
   buf = SG_RESPONSE_OUTPUT_PORT_BUFFER(self)->buf;
-  be = buf->last + BUFFER_SIZE;
+  be = buf->pos + BUFFER_SIZE;
   for (written = 0; written < size; written++) {
     if (buf->last == be) {
       buf->last_buf = 0;
-      allocate_buffer(self, SG_RESPONSE_OUTPUT_PORT_BUFFER(self));
+      allocate_buffer(self);
       buf = SG_RESPONSE_OUTPUT_PORT_BUFFER(self)->buf;
     }
     *buf->last++ = *ba++;
@@ -866,17 +864,23 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   saved_loadpath = setup_load_path(vm, r->connection->log, sg_conf);
   if (SG_UNDEFP(nginx_dispatch)) {
     if (init_base_library(r->connection->log) != NGX_OK) {
+      ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
   }
   proc = retrieve_procedure(r->connection->log, sg_conf);
   if (!SG_PROCEDUREP(proc)) {
+    ngx_http_finalize_request(r, NGX_HTTP_NOT_FOUND);
     return NGX_HTTP_NOT_FOUND;
   }
-  
-  rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
-  if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
-    return rc;
+
+  if (r->request_length > 0) {
+    r->request_body_in_clean_file = 1;
+    rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
+    if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
+      ngx_http_finalize_request(r, rc);
+      return rc;
+    }
   }
   
   /* TODO call initialiser with configuration in location */
@@ -890,6 +894,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 		  "'sagittarius': Failed to execute nginx-dispatch-request");
     vm->loadPath = saved_loadpath;
     ngx_http_discard_request_body(r);
+    ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;    
   } SG_END_PROTECT;
 
@@ -898,6 +903,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   /* The procedure didn't consume the request, so discard it */
   rc = ngx_http_discard_request_body(r);
   if (rc != NGX_OK && rc != NGX_AGAIN) {
+    ngx_http_finalize_request(r, rc);
     return rc;
   }
   
@@ -908,23 +914,28 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 		  &r->headers_out.content_type);
 
     /* convert Scheme response to C response */
-    out = SG_RESPONSE_OUTPUT_PORT_BUFFER(SG_NGINX_RESPONSE(resp)->out);
+    out = SG_RESPONSE_OUTPUT_PORT_ROOT(SG_NGINX_RESPONSE(resp)->out);
     r->headers_out.status = SG_INT_VALUE(status);
     r->headers_out.content_length_n = compute_content_length(out);
 
     rc = ngx_http_send_header(r);
   
     if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+      ngx_http_finalize_request(r, rc);
       return rc;
     }
     if (out) {
-      return ngx_http_output_filter(r, out);
+      rc = ngx_http_output_filter(r, out);
+      ngx_http_finalize_request(r, rc);
+      return rc;
     } else {
+      ngx_http_finalize_request(r, rc);
       return NGX_OK;
     }
   } else {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Scheme program returned non fixnum.");
+    ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 }
@@ -956,33 +967,21 @@ static ngx_int_t init_base_library(ngx_log_t *log)
   return NGX_OK;
 }
 
-static SgObject make_load_paths(ngx_log_t *log,
-				ngx_http_sagittarius_conf_t *conf)
-{
-  SgObject h = SG_NIL, t = SG_NIL;
-  ngx_uint_t i;
-  ngx_str_t *value = conf->load_paths->elts;
-  for (i = 0; i < conf->load_paths->nelts; i++) {
-    ngx_str_t *s = &value[i];
-    ngx_log_error(NGX_LOG_DEBUG, log, 0,
-		  "'sagittarius': load path: %V", s);
-    SG_APPEND1(h, t, ngx_str_to_string(s));
-  }
-  return h;
-}
-
 static SgObject setup_load_path(volatile SgVM *vm,
 				ngx_log_t *log,
 				ngx_http_sagittarius_conf_t *sg_conf)
 {
   SgObject saved_loadpath = vm->loadPath;
-  SgObject load_paths = make_load_paths(log, sg_conf);
-  SgObject cp;
-  
-  SG_FOR_EACH(cp, load_paths) {
+  ngx_uint_t i;
+  ngx_str_t *value = sg_conf->load_paths->elts;
+
+  for (i = 0; i < sg_conf->load_paths->nelts; i++) {
+    ngx_str_t *s = &value[i];
+    ngx_log_error(NGX_LOG_DEBUG, log, 0, "'sagittarius': load path: %V", s);
     /* we prepend the load path */
-    Sg_AddLoadPath(SG_STRING(SG_CAR(cp)), FALSE);
+    Sg_AddLoadPath(ngx_str_to_string(s), FALSE);
   }
+
   return saved_loadpath;
 }
 
