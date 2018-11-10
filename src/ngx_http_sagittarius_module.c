@@ -432,9 +432,9 @@ static int64_t request_in_read_u8(SgObject self, uint8_t *buf, int64_t size)
       }
     }
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "'sagittarius': reading from buffer %p, %p",
-		  port->current_chain,
-		  r->request_body->buf);
+		  "'sagittarius': reading from buffer %p",
+		  port->current_buffer);
+    
     if (port->current_buffer) {
       for (; read < size; read++) {
 	if (port->current_buffer == port->current_chain->buf->last) {
@@ -901,13 +901,17 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     return NGX_HTTP_NOT_FOUND;
   }
 
-  if (r->request_length > 0 || r->headers_in.chunked) {
-    r->request_body_in_clean_file = 1;
-    rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
-    if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
-      ngx_http_finalize_request(r, rc);
-      return rc;
-    }
+  if (r->headers_in.content_length_n > 0 || r->headers_in.chunked) {
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		  "'sagittarius': reading client body %d",
+		  r->headers_in.content_length_n);
+    do {
+      rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
+      if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
+	ngx_http_finalize_request(r, rc);
+	return rc;
+      }
+    } while (rc == NGX_AGAIN);
   }
   
   /* TODO call initialiser with configuration in location */
