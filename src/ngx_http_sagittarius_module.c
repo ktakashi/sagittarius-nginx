@@ -91,6 +91,7 @@ typedef struct SgNginxRequestRec
   SgObject method;
   SgObject uri;
   SgObject headers;
+  SgObject cookies;
   SgObject body;		/* binary input port */
   ngx_http_request_t *rawNginxRequest;
   /* TODO maybe cache the builtin values? */
@@ -837,7 +838,8 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
   SG_SET_CLASS(ngxReq, SG_CLASS_NGINX_REQUEST);
   ngxReq->method = ngx_str_to_string(&req->method_name);
   ngxReq->uri = ngx_str_to_string(&req->uri);
-  ngxReq->headers = SG_FALSE;
+  ngxReq->headers = SG_FALSE;	/* initialise lazily */
+  ngxReq->cookies = SG_FALSE;	/* initialise lazily */
   ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
   return SG_OBJ(ngxReq);
