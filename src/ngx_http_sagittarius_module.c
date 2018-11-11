@@ -424,53 +424,55 @@ static int64_t request_in_read_u8(SgObject self, uint8_t *buf, int64_t size)
   SgRequestInputPort *port = SG_REQUEST_INPUT_PORT(self);
   ngx_http_request_t *r = port->request;
   int64_t read = 0;
-  
-  if (SG_UNDEFP(port->temp_inp)) {
-    if (port->current_chain == NULL) {
-      port->current_chain = r->request_body->bufs;
-      if (port->current_chain) {
-	port->current_buffer = port->current_chain->buf->pos;
-      }
-    }
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "'sagittarius': reading from buffer %p",
-		  port->current_buffer);
-    
-    if (port->current_buffer) {
-      for (; read < size; read++) {
-	if (port->current_buffer == port->current_chain->buf->last) {
-	  if (!port->current_chain->buf->last_buf) {
-	    port->current_chain = port->current_chain->next;
-	    port->current_buffer = port->current_chain->buf->pos;
-	  } else {
-	    break;
-	  }
-	}
-	buf[read] = *port->current_buffer++;
-      }
-    }
-  }
-  if (read != size) {
+
+  if (r->request_body) {
     if (SG_UNDEFP(port->temp_inp)) {
-      if (r->request_body->temp_file) {
-	SgObject file;
-	/* open file input port */
-	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		      "'sagittarius': temp file %V",
-		      &r->request_body->temp_file->file.name);
-	file = Sg_MakeFileFromFD(r->request_body->temp_file->file.fd);
-	port->temp_inp =
-	  Sg_MakeFileBinaryInputPort(SG_FILE(file), SG_BUFFER_MODE_BLOCK);
-      } else {
-	port->temp_inp = SG_FALSE;
+      if (port->current_chain == NULL) {
+	port->current_chain = r->request_body->bufs;
+	if (port->current_chain) {
+	  port->current_buffer = port->current_chain->buf->pos;
+	}
+      }
+      ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		    "'sagittarius': reading from buffer %p",
+		    port->current_buffer);
+    
+      if (port->current_buffer) {
+	for (; read < size; read++) {
+	  if (port->current_buffer == port->current_chain->buf->last) {
+	    if (!port->current_chain->buf->last_buf) {
+	      port->current_chain = port->current_chain->next;
+	      port->current_buffer = port->current_chain->buf->pos;
+	    } else {
+	      break;
+	    }
+	  }
+	  buf[read] = *port->current_buffer++;
+	}
       }
     }
-    if (!SG_FALSEP(port->temp_inp)) {
-      /* 
-	 it's safe to do this since the owner port is locked.
-	 we don't check if the input is exhausted or not here.
-       */
-      read += Sg_ReadbUnsafe(SG_PORT(port->temp_inp), buf+read, size-read);
+    if (read != size) {
+      if (SG_UNDEFP(port->temp_inp)) {
+	if (r->request_body->temp_file) {
+	  SgObject file;
+	  /* open file input port */
+	  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+			"'sagittarius': temp file %V",
+			&r->request_body->temp_file->file.name);
+	  file = Sg_MakeFileFromFD(r->request_body->temp_file->file.fd);
+	  port->temp_inp =
+	    Sg_MakeFileBinaryInputPort(SG_FILE(file), SG_BUFFER_MODE_BLOCK);
+	} else {
+	  port->temp_inp = SG_FALSE;
+	}
+      }
+      if (!SG_FALSEP(port->temp_inp)) {
+	/* 
+	   it's safe to do this since the owner port is locked.
+	   we don't check if the input is exhausted or not here.
+	*/
+	read += Sg_ReadbUnsafe(SG_PORT(port->temp_inp), buf+read, size-read);
+      }
     }
   }
   return read;
@@ -874,6 +876,7 @@ static void ngx_http_request_body_init(ngx_http_request_t *r)
   
 }
 
+#include <unistd.h>
 /* Main handler */
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 {
@@ -905,7 +908,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 
   if (r->headers_in.content_length_n > 0 || r->headers_in.chunked) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "'sagittarius': reading client body %d",
+		  "'sagittarius': reading client body %d, %d",
 		  r->headers_in.content_length_n);
     do {
       rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
@@ -934,6 +937,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     
   /* The procedure didn't consume the request, so discard it */
   rc = ngx_http_discard_request_body(r);
+
   if (rc != NGX_OK && rc != NGX_AGAIN) {
     ngx_http_finalize_request(r, rc);
     return rc;
