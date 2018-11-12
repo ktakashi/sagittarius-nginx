@@ -383,6 +383,7 @@ static void ngx_add_header(SgObject res, SgObject name, SgObject value)
     }									\
     r->headers_out. field ->value.data = uc;				\
     r->headers_out. field ->value.len = ngx_strlen(uc);			\
+    r->headers_out. field ->hash = Sg_StringHash(value, 0);		\
   } while (0)
 
 #define set_builtin_header(field, name) set_builtin_header3(field, name, #field)
@@ -435,6 +436,7 @@ static void ngx_add_header(SgObject res, SgObject name, SgObject value)
     e->value.data = uc;
     e->value.len = ngx_strlen(uc);
     e->lowcase_key = (unsigned char *)Sg_Utf32sToUtf8s(s);
+    e->hash = Sg_StringHash(value, 0);
   }
 
 #undef set_builtin_header
@@ -445,7 +447,6 @@ static void ngx_add_header(SgObject res, SgObject name, SgObject value)
 static void ngx_remove_header_from_list(ngx_http_request_t *r,
 					unsigned char *name)
 {
-  ngx_pool_t *pool = r->pool;
   ngx_list_part_t *part = &r->headers_out.headers.part;
   ngx_table_elt_t *data = part->elts;
   ngx_uint_t i;
@@ -462,11 +463,7 @@ static void ngx_remove_header_from_list(ngx_http_request_t *r,
     e = &data[i++];
     
     if (ngx_strcmp(e->lowcase_key, name) == 0) {
-      /* okay remove it */
-      ngx_memmove(data + i - 1, data + i, sizeof(ngx_table_elt_t));
-      i--;
-      part->nelts--;
-      ngx_pfree(pool, e);
+      e->hash = 0;		/* easy pisy */
     }
   }
 }
@@ -1229,7 +1226,6 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Failed to execute nginx-dispatch-request");
     vm->loadPath = saved_loadpath;
-    ngx_http_discard_request_body(r);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;    
   } SG_END_PROTECT;
 
@@ -1253,7 +1249,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     r->headers_out.status = SG_INT_VALUE(status);
     r->headers_out.content_length_n = compute_content_length(out);
     r->header_only = (r->headers_out.content_length_n == 0);
-    
+
     rc = ngx_http_send_header(r);
   
     if (rc == NGX_ERROR) {
