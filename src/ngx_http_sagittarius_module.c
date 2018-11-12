@@ -1197,21 +1197,18 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   saved_loadpath = setup_load_path(vm, r->connection->log, sg_conf);
   if (SG_UNDEFP(nginx_dispatch)) {
     if (init_base_library(r->connection->log) != NGX_OK) {
-      ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
   }
   proc = retrieve_procedure(r->connection->log, sg_conf);
   if (!SG_PROCEDUREP(proc)) {
-    ngx_http_finalize_request(r, NGX_HTTP_NOT_FOUND);
     return NGX_HTTP_NOT_FOUND;
   }
 
   if (r->headers_in.content_length_n > 0 || r->headers_in.chunked) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "'sagittarius': reading client body %d, %p",
-		  r->headers_in.content_length_n,
-		  r->read_event_handler);
+		  "'sagittarius': reading client body %d",
+		  r->headers_in.content_length_n);
     do {
       /* 
 	 Retrying doesn't help us for Expect: 100-continue case.
@@ -1219,13 +1216,11 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
        */
       rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
       if (rc != NGX_OK && rc != NGX_AGAIN) {
-	ngx_http_finalize_request(r, rc);
-	return rc;
+	return NGX_HTTP_INTERNAL_SERVER_ERROR;
       }
     } while (rc == NGX_AGAIN);
   }
   
-  /* TODO call initialiser with configuration in location */
   req = make_nginx_request(r);
   resp = make_nginx_response(r);
   SG_UNWIND_PROTECT {
@@ -1235,7 +1230,6 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 		  "'sagittarius': Failed to execute nginx-dispatch-request");
     vm->loadPath = saved_loadpath;
     ngx_http_discard_request_body(r);
-    ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;    
   } SG_END_PROTECT;
 
@@ -1245,7 +1239,6 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   rc = ngx_http_discard_request_body(r);
 
   if (rc != NGX_OK && rc != NGX_AGAIN) {
-    ngx_http_finalize_request(r, rc);
     return rc;
   }
   
@@ -1259,25 +1252,24 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     out = SG_RESPONSE_OUTPUT_PORT_ROOT(SG_NGINX_RESPONSE(resp)->out);
     r->headers_out.status = SG_INT_VALUE(status);
     r->headers_out.content_length_n = compute_content_length(out);
-
+    r->header_only = (r->headers_out.content_length_n == 0);
+    
     rc = ngx_http_send_header(r);
   
-    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
-      ngx_http_finalize_request(r, rc);
+    if (rc == NGX_ERROR) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		    "'sagittarius': Failed to send header %d'.", rc);
       return rc;
     }
+    
     if (out) {
-      rc = ngx_http_output_filter(r, out);
-      ngx_http_finalize_request(r, rc);
-      return rc;
-    } else {
-      ngx_http_finalize_request(r, rc);
-      return NGX_OK;
+      ngx_http_output_filter(r, out);
     }
+    return SG_INT_VALUE(status);
+
   } else {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Scheme program returned non fixnum.");
-    ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 }

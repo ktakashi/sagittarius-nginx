@@ -40,20 +40,36 @@ clean:
 install:
 	$(MAKE) -C nginx-$(NGINX_VERSION) install
 
-run: prep
+run: prep example
 	./nginx-$(NGINX_VERSION)/objs/nginx \
 	  -c $(shell pwd)/../conf/example.conf \
 	  -p $(shell pwd)/$(SANDBOX)
 
+example:
+	mkdir -p $(SANDBOX)/lib $(SANDBOX)/example
+	cp -r ../example/* $(SANDBOX)/example
+
 prep: nginx
 	mkdir -p $(SANDBOX)/logs $(SANDBOX)/modules
-	mkdir -p $(SANDBOX)/lib $(SANDBOX)/test-lib
 	cp nginx-$(NGINX_VERSION)/objs/ngx_http_sagittarius_module.so \
 	   $(SANDBOX)/modules/
 	cp -r ../scheme/sagittarius $(SANDBOX)/lib
-	cp -r ../example/* $(SANDBOX)/test-lib
 
 stop:
 	./nginx-$(NGINX_VERSION)/objs/nginx -s stop \
 	-c $(shell pwd)/../conf/example.conf \
+	-p $(shell pwd)/$(SANDBOX)
+
+check: prep test-lib
+	./nginx-$(NGINX_VERSION)/objs/nginx \
+	  -c $(shell pwd)/../test/conf/test.conf \
+	  -p $(shell pwd)/$(SANDBOX)
+
+test-lib:
+	mkdir -p $(SANDBOX)/lib $(SANDBOX)/test/web
+	cp -r ../test/web/* $(SANDBOX)/test/web
+
+check-stop:
+	./nginx-$(NGINX_VERSION)/objs/nginx -s stop \
+	-c $(shell pwd)/../test/conf/test.conf \
 	-p $(shell pwd)/$(SANDBOX)

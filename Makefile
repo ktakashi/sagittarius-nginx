@@ -46,3 +46,8 @@ run:
 
 stop:
 	$(MAKE) -C build stop
+
+check:
+	$(MAKE) -C build check
+	./test/run.sh
+	$(MAKE) -C build check-stop
