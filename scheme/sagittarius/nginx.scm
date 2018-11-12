@@ -32,6 +32,10 @@
 	    nginx-request-input-port
 
 	    nginx-response-output-port
+	    nginx-response-headers
+	    nginx-response-header-add!
+	    nginx-response-header-set!
+	    nginx-response-header-remove!
 	    )
     (import (rnrs)
 	    (sagittarius nginx internal))

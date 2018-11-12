@@ -20,6 +20,16 @@
   (pp (nginx-request-headers request) out)
   (let ((bv (get-bytevector-all (nginx-request-input-port request))))
     (unless (eof-object? bv) (put-string out (utf8->string bv))))
+  (nginx-response-header-add! response "Date" "date date")
+  (nginx-response-header-add! response "Location" "/location")
+  (nginx-response-header-add! response "Blar" "blar1")
+  (nginx-response-header-add! response "Blar" "blar2")
+  (nginx-response-header-set! response "Baz" "baz0")
+  (nginx-response-header-remove! response "Baz")
+  (nginx-response-header-set! response "Baz" "baz1")
+  (nginx-response-header-set! response "Baz" "baz2")
+
+  (pp (nginx-response-headers response) out)
   (values 200 'text/plain))
 
 )

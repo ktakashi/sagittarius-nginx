@@ -85,7 +85,7 @@ ngx_module_t ngx_http_sagittarius_module = {
 #define ngx_str_to_string(s) Sg_Utf8sToUtf32s((const char *)(s)->data, (s)->len)
 #define BUFFER_SIZE SG_PORT_DEFAULT_BUFFER_SIZE
 
-typedef struct SgNginxRequestRec
+typedef struct
 {
   SG_HEADER;
   SgObject method;
@@ -237,7 +237,7 @@ SG_DEFINE_GETTER("nginx-request-input-port", "nginx-request",
 #undef HEADER_FIELD
 
 
-typedef struct SgNginxResponseRec
+typedef struct
 {
   SG_HEADER;
   SgObject headers;
@@ -267,7 +267,8 @@ static void nres_content_type_set(SgNginxResponse *nr, SgObject v)
 {
   char *r;
   if (!SG_STRINGP(v)) {
-    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-content-type-set!"), SG_INTERN("string"),
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-content-type-set!"),
+				    SG_INTERN("string"),
 				    v, SG_NIL);
   }
   r = Sg_Utf32sToUtf8s(v);
@@ -278,6 +279,56 @@ static void nres_content_type_set(SgNginxResponse *nr, SgObject v)
 
 static SgObject nres_headers(SgNginxResponse *nr)
 {
+  if (SG_FALSEP(nr->headers)) {
+    SgObject h = SG_NIL, t = SG_NIL;
+    ngx_http_request_t *r = nr->request;
+    ngx_uint_t i;
+    ngx_list_part_t *part;
+    ngx_table_elt_t *data;
+
+#define ADD_HEADER(elt)							\
+    do {								\
+      SgObject n = ngx_str_to_string(&(elt)->key);			\
+      SgObject v = ngx_str_to_string(&(elt)->value);			\
+      SG_APPEND1(h, t, SG_LIST2(n, v));					\
+    } while (0)
+    
+#define ADD_BUILTIN_HEADER(field)					\
+    do {								\
+      if (r->headers_out. field) {					\
+	ADD_HEADER(r->headers_out. field);				\
+      }									\
+    } while (0)
+
+    ADD_BUILTIN_HEADER(server);
+    ADD_BUILTIN_HEADER(date);
+    ADD_BUILTIN_HEADER(content_encoding);
+    ADD_BUILTIN_HEADER(location);
+    ADD_BUILTIN_HEADER(refresh);
+    ADD_BUILTIN_HEADER(last_modified);
+    ADD_BUILTIN_HEADER(content_range);
+    ADD_BUILTIN_HEADER(accept_ranges);
+    ADD_BUILTIN_HEADER(www_authenticate);
+    ADD_BUILTIN_HEADER(expires);
+    ADD_BUILTIN_HEADER(etag);
+#undef ADD_BUILTIN_HEADER
+
+    part = &r->headers_out.headers.part;
+    data = part->elts;
+    for (i = 0; ; i++) {
+      ngx_table_elt_t *e;
+      if (i >= part->nelts) {
+	if (part->next == NULL) break;
+	part = part->next;
+	data = part->elts;
+	i = 0;
+      }
+      e = &data[i++];
+      ADD_HEADER(e);
+#undef ADD_HEADER
+    }
+    nr->headers = h;
+  }
   return nr->headers;
 }
 static SgObject nres_out(SgNginxResponse *nr)
@@ -315,6 +366,235 @@ SG_DEFINE_GETTER("nginx-response-headers", "nginx-response",
 SG_DEFINE_GETTER("nginx-response-output-port", "nginx-response",
 		 SG_NGINX_RESPONSEP, nres_out, SG_NGINX_RESPONSE,
 		 nginx_response_output_port);
+
+static void ngx_add_header(SgObject res, SgObject name, SgObject value)
+{
+  ngx_http_request_t *r = SG_NGINX_RESPONSE(res)->request;
+  SgObject s = Sg_StringDownCase(SG_STRING(name));
+  unsigned char *uc;
+
+  SG_NGINX_RESPONSE(res)->headers = SG_FALSE; /* reset */
+#define set_builtin_header3(field, name, sname)				\
+  do {									\
+    if (!r->headers_out. field) {					\
+      r->headers_out. field = ngx_pcalloc(r->pool, sizeof(ngx_table_elt_t)); \
+      ngx_str_set(&r->headers_out. field ->key, name);			\
+      r->headers_out. field ->lowcase_key = (unsigned char *)sname;	\
+    }									\
+    r->headers_out. field ->value.data = uc;				\
+    r->headers_out. field ->value.len = ngx_strlen(uc);			\
+  } while (0)
+
+#define set_builtin_header(field, name) set_builtin_header3(field, name, #field)
+
+  uc = (unsigned char *)Sg_Utf32sToUtf8s(value);
+  /* 
+     some of the headers we only allow to send once 
+     NOTE: we don't check the format of the header
+  */
+  if (ustrcmp(SG_STRING_VALUE(s), "server") == 0) {
+    /* The Server: header must be set by configuration so ignore */
+  } else if (ustrcmp(SG_STRING_VALUE(s), "date") == 0) {
+    if (!r->headers_out.date) {
+      r->headers_out.date =
+	(ngx_table_elt_t *)ngx_list_push(&r->headers_out.headers);
+      ngx_str_set(&r->headers_out.date->key, "Date");
+      r->headers_out.date->lowcase_key = (unsigned char *)"date";
+    }
+    set_builtin_header(date, "Date");
+    
+  } else if (ustrcmp(SG_STRING_VALUE(s), "content-length") == 0) {
+    /* The Server: header must be set by the content */
+  } else if (ustrcmp(SG_STRING_VALUE(s), "content-encoding") == 0) {
+    set_builtin_header3(content_encoding,
+			"Content-Encoding", "content-encoding");
+  } else if (ustrcmp(SG_STRING_VALUE(s), "location") == 0) {
+    set_builtin_header(location, "Location");
+  } else if (ustrcmp(SG_STRING_VALUE(s), "refresh") == 0) {
+    set_builtin_header(refresh, "Refresh");
+  } else if (ustrcmp(SG_STRING_VALUE(s), "last-modified") == 0) {
+    set_builtin_header3(last_modified, "Last-Modified", "last-modified");
+  } else if (ustrcmp(SG_STRING_VALUE(s), "content-range") == 0) {
+    set_builtin_header3(content_range, "Content-Range", "content-range");
+  } else if (ustrcmp(SG_STRING_VALUE(s), "accept-ranges") == 0) {
+    set_builtin_header3(accept_ranges, "Accept-Ranges", "accept-ranges");
+  } else if (ustrcmp(SG_STRING_VALUE(s), "www-authenticate") == 0) {
+    set_builtin_header3(www_authenticate,
+			"WWW-Authenticate", "www-authenticate");
+  } else if (ustrcmp(SG_STRING_VALUE(s), "expires") == 0) {
+    set_builtin_header(expires, "Expires");
+  } else if (ustrcmp(SG_STRING_VALUE(s), "etag") == 0) {
+    set_builtin_header(etag, "ETag");
+  } else {
+    unsigned char *n;
+    ngx_table_elt_t *e;
+    e = (ngx_table_elt_t *)ngx_list_push(&r->headers_out.headers);
+    n = (unsigned char *)Sg_Utf32sToUtf8s(name);
+    e->key.data = n;
+    e->key.len = ngx_strlen(n);
+    e->value.data = uc;
+    e->value.len = ngx_strlen(uc);
+    e->lowcase_key = (unsigned char *)Sg_Utf32sToUtf8s(s);
+  }
+
+#undef set_builtin_header
+#undef set_builtin_header3
+}
+
+/* This takes O(n)... */
+static void ngx_remove_header_from_list(ngx_http_request_t *r,
+					unsigned char *name)
+{
+  ngx_pool_t *pool = r->pool;
+  ngx_list_part_t *part = &r->headers_out.headers.part;
+  ngx_table_elt_t *data = part->elts;
+  ngx_uint_t i;
+
+  i = 0;
+  while (1) {
+    ngx_table_elt_t *e;
+    if (i >= part->nelts) {
+      if (part->next == NULL) break;
+      part = part->next;
+      data = part->elts;
+      i = 0;
+    }
+    e = &data[i++];
+    
+    if (ngx_strcmp(e->lowcase_key, name) == 0) {
+      /* okay remove it */
+      ngx_memmove(data + i - 1, data + i, sizeof(ngx_table_elt_t));
+      i--;
+      part->nelts--;
+      ngx_pfree(pool, e);
+    }
+  }
+}
+
+static void ngx_remove_header(SgObject res, SgObject name)
+{
+  ngx_http_request_t *r = SG_NGINX_RESPONSE(res)->request;
+  SgObject s = Sg_StringDownCase(SG_STRING(name));
+
+  SG_NGINX_RESPONSE(res)->headers = SG_FALSE; /* reset */
+#define remove_builtin(field)				\
+  do {							\
+    if (r->headers_out. field) {			\
+      ngx_pfree(r->pool, r->headers_out. field);	\
+      r->headers_out. field = NULL;			\
+    }							\
+  } while (0)
+  
+  if (ustrcmp(SG_STRING_VALUE(s), "server") == 0) {
+    /* The Server: header must be set by configuration so ignore */
+  } else if (ustrcmp(SG_STRING_VALUE(s), "date") == 0) {
+    if (r->headers_out.date) {
+      ngx_remove_header_from_list(r, (unsigned char *)"date");
+    }
+    remove_builtin(date);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "content-length") == 0) {
+    /* The Server: header must be set by the content */
+  } else if (ustrcmp(SG_STRING_VALUE(s), "content-encoding") == 0) {
+    remove_builtin(content_encoding);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "location") == 0) {
+    remove_builtin(location);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "refresh") == 0) {
+    remove_builtin(refresh);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "last-modified") == 0) {
+    remove_builtin(last_modified);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "content-range") == 0) {
+    remove_builtin(content_range);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "accept-ranges") == 0) {
+    remove_builtin(accept_ranges);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "www-authenticate") == 0) {
+    remove_builtin(www_authenticate);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "expires") == 0) {
+    remove_builtin(expires);
+  } else if (ustrcmp(SG_STRING_VALUE(s), "etag") == 0) {
+    remove_builtin(etag);
+  } else {
+    ngx_remove_header_from_list(r, (unsigned char *)Sg_Utf32sToUtf8s(s));
+  }
+}
+
+/* response operation */
+static SgObject nginx_response_add_header(SgObject *argv, int argc, void *data)
+{
+  if (argc != 3) {
+    Sg_WrongNumberOfArgumentsViolation(SG_INTERN("nginx-response?"), 1,
+				       argc, SG_NIL);
+  }
+  if (!SG_NGINX_RESPONSEP(argv[0])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-add!"),
+				    SG_INTERN("nginx-response"),
+				    argv[0], SG_NIL);
+  }
+  if (!SG_STRING(argv[1])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-add!"),
+				    SG_INTERN("string"),
+				    argv[1], SG_NIL);
+  }
+  if (!SG_STRING(argv[2])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-add!"),
+				    SG_INTERN("string"),
+				    argv[2], SG_NIL);
+  }
+  ngx_add_header(argv[0], argv[1], argv[2]);
+  return argv[0];
+}
+static SG_DEFINE_SUBR(nginx_response_add_header_stub, 3, 0,
+		      nginx_response_add_header, SG_FALSE, NULL);
+
+static SgObject nginx_response_set_header(SgObject *argv, int argc, void *data)
+{
+  if (argc != 3) {
+    Sg_WrongNumberOfArgumentsViolation(SG_INTERN("nginx-response?"), 1,
+				       argc, SG_NIL);
+  }
+  if (!SG_NGINX_RESPONSEP(argv[0])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-set!"),
+				    SG_INTERN("nginx-response"),
+				    argv[0], SG_NIL);
+  }
+  if (!SG_STRING(argv[1])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-set!"),
+				    SG_INTERN("string"),
+				    argv[1], SG_NIL);
+  }
+  if (!SG_STRING(argv[2])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-set!"),
+				    SG_INTERN("string"),
+				    argv[2], SG_NIL);
+  }
+  ngx_remove_header(argv[0], argv[1]);
+  ngx_add_header(argv[0], argv[1], argv[2]);
+  return argv[0];
+}
+static SG_DEFINE_SUBR(nginx_response_set_header_stub, 3, 0,
+		      nginx_response_set_header, SG_FALSE, NULL);
+
+static SgObject nginx_response_del_header(SgObject *argv, int argc, void *data)
+{
+  if (argc != 2) {
+    Sg_WrongNumberOfArgumentsViolation(SG_INTERN("nginx-response?"), 1,
+				       argc, SG_NIL);
+  }
+  if (!SG_NGINX_RESPONSEP(argv[0])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-remove!"),
+				    SG_INTERN("nginx-response"),
+				    argv[0], SG_NIL);
+  }
+  if (!SG_STRING(argv[1])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-remove!"),
+				    SG_INTERN("string"),
+				    argv[1], SG_NIL);
+  }
+  ngx_remove_header(argv[0], argv[1]);
+  return argv[0];
+}
+static SG_DEFINE_SUBR(nginx_response_del_header_stub, 2, 0,
+		      nginx_response_del_header, SG_FALSE, NULL);
+
 
 /* conditions */
 static SgClass *error_cpl[] = {
@@ -671,6 +951,28 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   SG_PROCEDURE_NAME(&nginx_response_p_stub) = SG_MAKE_STRING("nginx-response?");
   SG_PROCEDURE_TRANSPARENT(&nginx_response_p_stub) = SG_PROC_TRANSPARENT;
 
+  Sg_InsertBinding(SG_LIBRARY(lib), SG_INTERN("nginx-response-header-add!"),
+		   &nginx_response_add_header_stub);
+  SG_PROCEDURE_NAME(&nginx_response_add_header_stub) =
+    SG_MAKE_STRING("nginx-response-header-add!");
+  SG_PROCEDURE_TRANSPARENT(&nginx_response_add_header_stub) =
+    SG_SUBR_SIDE_EFFECT;
+
+  Sg_InsertBinding(SG_LIBRARY(lib), SG_INTERN("nginx-response-header-set!"),
+		   &nginx_response_set_header_stub);
+  SG_PROCEDURE_NAME(&nginx_response_set_header_stub) =
+    SG_MAKE_STRING("nginx-response-header-set!");
+  SG_PROCEDURE_TRANSPARENT(&nginx_response_set_header_stub) =
+    SG_SUBR_SIDE_EFFECT;
+
+  Sg_InsertBinding(SG_LIBRARY(lib), SG_INTERN("nginx-response-header-remove!"),
+		   &nginx_response_del_header_stub);
+  SG_PROCEDURE_NAME(&nginx_response_del_header_stub) =
+    SG_MAKE_STRING("nginx-response-header-remove!");
+  SG_PROCEDURE_TRANSPARENT(&nginx_response_del_header_stub) =
+    SG_SUBR_SIDE_EFFECT;
+
+  
 #define INSERT_ACCESSOR(name, cname, effect)				\
   do {									\
     Sg_InsertBinding(SG_LIBRARY(lib), SG_INTERN(name),			\
@@ -851,7 +1153,7 @@ static SgObject make_nginx_response(ngx_http_request_t *req)
 {
   SgNginxResponse *ngxRes = SG_NEW(SgNginxResponse);
   SG_SET_CLASS(ngxRes, SG_CLASS_NGINX_RESPONSE);
-  ngxRes->headers = SG_NIL;	/* TODO */
+  ngxRes->headers = SG_FALSE;	/* just a cache */
   ngxRes->out = make_response_output_port(req);
   ngxRes->request = req;
   req->headers_out.content_type.len = sizeof("application/octet-stream") - 1;
@@ -876,7 +1178,6 @@ static void ngx_http_request_body_init(ngx_http_request_t *r)
   
 }
 
-#include <unistd.h>
 /* Main handler */
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 {
@@ -908,11 +1209,16 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 
   if (r->headers_in.content_length_n > 0 || r->headers_in.chunked) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "'sagittarius': reading client body %d, %d",
-		  r->headers_in.content_length_n);
+		  "'sagittarius': reading client body %d, %p",
+		  r->headers_in.content_length_n,
+		  r->read_event_handler);
     do {
+      /* 
+	 Retrying doesn't help us for Expect: 100-continue case.
+	 Not sure how we should handle that... (I hope it's only curl)
+       */
       rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
-      if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
+      if (rc != NGX_OK && rc != NGX_AGAIN) {
 	ngx_http_finalize_request(r, rc);
 	return rc;
       }
