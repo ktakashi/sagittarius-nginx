@@ -92,6 +92,7 @@ typedef struct
   SgObject uri;
   SgObject headers;
   SgObject cookies;
+  int      cookies_parsed_p;
   SgObject body;		/* binary input port */
   ngx_http_request_t *rawNginxRequest;
   /* TODO maybe cache the builtin values? */
@@ -155,11 +156,33 @@ static SgObject nr_body(SgNginxRequest *nr)
 static SgObject nr_cookies(SgNginxRequest *nr)
 {
   if (SG_FALSEP(nr->cookies)) {
-    nr->cookies = SG_NIL;	/* dummy */
+    ngx_http_request_t *r = nr->rawNginxRequest;
+    ngx_uint_t i, len = r->headers_in.cookies.nelts;
+    ngx_table_elt_t **data = (ngx_table_elt_t **)r->headers_in.cookies.elts;
+    SgObject h = SG_NIL, t = SG_NIL;
+
+    for (i = 0; i < len; i++) {
+      ngx_table_elt_t *e = data[i];
+      SG_APPEND1(h, t, ngx_str_to_string(&e->value));
+    }
+    nr->cookies = h;
   }
   return nr->cookies;
 }
 
+static void nr_cookies_set(SgNginxRequest *nr, SgObject cookies)
+{
+  /* one short update by (sagittarius nginx) */
+  if (SG_FALSEP(nr->cookies) || nr->cookies_parsed_p) {
+    Sg_Error(UC("Invalid usage of cookies slot"));
+  }
+  if (!SG_LISTP(cookies)) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-request-cookies-set!"),
+				    SG_INTERN("list"), cookies, SG_NIL);
+  }
+  nr->cookies_parsed_p = TRUE;
+  nr->cookies = cookies;
+}
 
 #define HEADER_FIELD(name, cname, n)					\
   static SgObject SG_CPP_CAT(nr_, cname)(SgNginxRequest *nr)		\
@@ -175,7 +198,7 @@ static SgSlotAccessor nr_slots[] = {
   SG_CLASS_SLOT_SPEC("method",     0, nr_method, NULL),
   SG_CLASS_SLOT_SPEC("uri",        1, nr_uri, NULL),
   SG_CLASS_SLOT_SPEC("headers",    2, nr_headers, NULL),
-  SG_CLASS_SLOT_SPEC("cookies", 3, nr_cookies, NULL),
+  SG_CLASS_SLOT_SPEC("cookies",    3, nr_cookies, nr_cookies_set),
   SG_CLASS_SLOT_SPEC("input-port", 4, nr_body, NULL),
 #define HEADER_FIELD(name, cname, n)				\
   SG_CLASS_SLOT_SPEC(#name, n+4, SG_CPP_CAT(nr_, cname), NULL),
@@ -238,6 +261,9 @@ SG_DEFINE_GETTER("nginx-request-headers", "nginx-request",
 SG_DEFINE_GETTER("nginx-request-cookies", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_cookies, SG_NGINX_REQUEST,
 		 nginx_request_cookies);
+SG_DEFINE_SETTER("nginx-request-cookies-set!", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_cookies_set, SG_NGINX_REQUEST,
+		 nginx_request_cookies_set);
 SG_DEFINE_GETTER("nginx-request-input-port", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_body, SG_NGINX_REQUEST,
 		 nginx_request_body);
@@ -999,6 +1025,8 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-cookies", nginx_request_cookies,
 		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-cookies-set!", nginx_request_cookies_set,
+		  SG_SUBR_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body,
 		  SG_PROC_NO_SIDE_EFFECT);
 #define HEADER_FIELD(name, cname, n)		\
@@ -1156,6 +1184,7 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
   ngxReq->uri = ngx_str_to_string(&req->uri);
   ngxReq->headers = SG_FALSE;	/* initialise lazily */
   ngxReq->cookies = SG_FALSE;	/* initialise lazily */
+  ngxReq->cookies_parsed_p = FALSE;
   ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
   return SG_OBJ(ngxReq);

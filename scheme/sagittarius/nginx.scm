@@ -39,6 +39,8 @@
 	    nginx-response-header-remove!
 	    )
     (import (rnrs)
+	    (rfc cookie)
+	    (srfi :1 lists)
 	    (sagittarius nginx internal))
 
 
@@ -47,7 +49,10 @@
     (cond  ((string? content-type) content-type)
 	   ((symbol? content-type) (symbol->string content-type))
 	   (else #f)))
-
+  (define (safe-parse-cookies-string str)
+    (guard (e (else '())) (parse-cookies-string str)))
+  (nginx-request-cookies-set! request
+    (append-map safe-parse-cookies-string (nginx-request-cookies request)))
   (let-values (((status content-type . headers) (procedure request response)))
     (cond  ((->contnet-type-string content-type) =>
 	    (lambda (ctype) (nginx-response-content-type-set! response ctype))))

@@ -1,15 +1,16 @@
 ;; example application for Sagittarius NGINX
-(library (web test-app)
+(library (web cookie)
     (export run)
     (import (rnrs)
-	    (sagittarius)
+	    (rfc cookie)
 	    (sagittarius nginx))
 
 (define (run request response) 
   (define out (transcoded-port (nginx-response-output-port response)
 			       (native-transcoder)))
-  (put-string out "Test application\n")
-  (nginx-response-header-add! response "X-Sagittarius" (sagittarius-version))
+  (for-each (lambda (cookie)
+	      (put-string out (cookie->string cookie)) (put-string out "\n"))
+	    (nginx-request-cookies request))
   (values 200 'text/plain))
 
 )
