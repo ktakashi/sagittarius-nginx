@@ -152,6 +152,15 @@ static SgObject nr_body(SgNginxRequest *nr)
   return nr->body;
 }
 
+static SgObject nr_cookies(SgNginxRequest *nr)
+{
+  if (SG_FALSEP(nr->cookies)) {
+    nr->cookies = SG_NIL;	/* dummy */
+  }
+  return nr->cookies;
+}
+
+
 #define HEADER_FIELD(name, cname, n)					\
   static SgObject SG_CPP_CAT(nr_, cname)(SgNginxRequest *nr)		\
   {									\
@@ -166,9 +175,10 @@ static SgSlotAccessor nr_slots[] = {
   SG_CLASS_SLOT_SPEC("method",     0, nr_method, NULL),
   SG_CLASS_SLOT_SPEC("uri",        1, nr_uri, NULL),
   SG_CLASS_SLOT_SPEC("headers",    2, nr_headers, NULL),
-  SG_CLASS_SLOT_SPEC("input-port", 3, nr_body, NULL),
+  SG_CLASS_SLOT_SPEC("cookies", 3, nr_cookies, NULL),
+  SG_CLASS_SLOT_SPEC("input-port", 4, nr_body, NULL),
 #define HEADER_FIELD(name, cname, n)				\
-  SG_CLASS_SLOT_SPEC(#name, n+3, SG_CPP_CAT(nr_, cname), NULL),
+  SG_CLASS_SLOT_SPEC(#name, n+4, SG_CPP_CAT(nr_, cname), NULL),
 #include "builtin_request_fields.inc"
 #undef HEADER_FIELD
   { { NULL } }
@@ -225,6 +235,9 @@ SG_DEFINE_GETTER("nginx-request-uri", "nginx-request",
 SG_DEFINE_GETTER("nginx-request-headers", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_headers, SG_NGINX_REQUEST,
 		 nginx_request_headers);
+SG_DEFINE_GETTER("nginx-request-cookies", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_cookies, SG_NGINX_REQUEST,
+		 nginx_request_cookies);
 SG_DEFINE_GETTER("nginx-request-input-port", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_body, SG_NGINX_REQUEST,
 		 nginx_request_body);
@@ -983,6 +996,8 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   INSERT_ACCESSOR("nginx-request-uri", nginx_request_uri,
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-headers", nginx_request_headers,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-cookies", nginx_request_cookies,
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body,
 		  SG_PROC_NO_SIDE_EFFECT);
