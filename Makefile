@@ -49,5 +49,10 @@ stop:
 
 check:
 	$(MAKE) -C build check
+	$(MAKE) check-run check-stop
+
+check-run:
 	./test/run.sh
+
+check-stop:
 	$(MAKE) -C build check-stop
