@@ -93,6 +93,11 @@ typedef struct
   SgObject headers;
   SgObject cookies;
   int      cookies_parsed_p;
+  SgObject query_string;	/* query string */
+  /* NGINX doesn't provide fragment so users need to parse manually */
+  SgObject original_uri;	/* original uri (incl. query and fragment) */
+  SgObject request_line;	/* Request line */
+  SgObject schema;		/* http/https */
   SgObject body;		/* binary input port */
   ngx_http_request_t *rawNginxRequest;
   /* TODO maybe cache the builtin values? */
@@ -148,6 +153,38 @@ static SgObject nr_uri(SgNginxRequest *nr)
   return nr->uri;
 }
 
+static SgObject nr_query_string(SgNginxRequest *nr)
+{
+  if (SG_FALSEP(nr->query_string)) {
+    nr->query_string = ngx_str_to_string(&nr->rawNginxRequest->args);
+  }
+  return nr->query_string;
+}
+
+static SgObject nr_original_uri(SgNginxRequest *nr)
+{
+  if (SG_FALSEP(nr->original_uri)) {
+    nr->original_uri = ngx_str_to_string(&nr->rawNginxRequest->unparsed_uri);
+  }
+  return nr->original_uri;
+}
+
+static SgObject nr_request_line(SgNginxRequest *nr)
+{
+  if (SG_FALSEP(nr->request_line)) {
+    nr->request_line = ngx_str_to_string(&nr->rawNginxRequest->request_line);
+  }
+  return nr->request_line;
+}
+
+static SgObject nr_schema(SgNginxRequest *nr)
+{
+  if (SG_FALSEP(nr->schema)) {
+    nr->schema = ngx_str_to_string(&nr->rawNginxRequest->schema);
+  }
+  return nr->schema;
+}
+
 static SgObject nr_body(SgNginxRequest *nr)
 {
   return nr->body;
@@ -199,9 +236,13 @@ static SgSlotAccessor nr_slots[] = {
   SG_CLASS_SLOT_SPEC("uri",        1, nr_uri, NULL),
   SG_CLASS_SLOT_SPEC("headers",    2, nr_headers, NULL),
   SG_CLASS_SLOT_SPEC("cookies",    3, nr_cookies, nr_cookies_set),
-  SG_CLASS_SLOT_SPEC("input-port", 4, nr_body, NULL),
+  SG_CLASS_SLOT_SPEC("query-string", 4, nr_query_string, NULL),
+  SG_CLASS_SLOT_SPEC("original-uri", 5, nr_original_uri, NULL),
+  SG_CLASS_SLOT_SPEC("request-line", 6, nr_request_line, NULL),
+  SG_CLASS_SLOT_SPEC("schema",     7, nr_schema, NULL),
+  SG_CLASS_SLOT_SPEC("input-port", 8, nr_body, NULL),
 #define HEADER_FIELD(name, cname, n)				\
-  SG_CLASS_SLOT_SPEC(#name, n+4, SG_CPP_CAT(nr_, cname), NULL),
+  SG_CLASS_SLOT_SPEC(#name, n+8, SG_CPP_CAT(nr_, cname), NULL),
 #include "builtin_request_fields.inc"
 #undef HEADER_FIELD
   { { NULL } }
@@ -264,6 +305,18 @@ SG_DEFINE_GETTER("nginx-request-cookies", "nginx-request",
 SG_DEFINE_SETTER("nginx-request-cookies-set!", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_cookies_set, SG_NGINX_REQUEST,
 		 nginx_request_cookies_set);
+SG_DEFINE_GETTER("nginx-request-query-string", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_query_string, SG_NGINX_REQUEST,
+		 nginx_request_query_string);
+SG_DEFINE_GETTER("nginx-request-original-uri", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_original_uri, SG_NGINX_REQUEST,
+		 nginx_request_original_uri);
+SG_DEFINE_GETTER("nginx-request-request-line", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_request_line, SG_NGINX_REQUEST,
+		 nginx_request_request_line);
+SG_DEFINE_GETTER("nginx-request-schema", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_schema, SG_NGINX_REQUEST,
+		 nginx_request_schema);
 SG_DEFINE_GETTER("nginx-request-input-port", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_body, SG_NGINX_REQUEST,
 		 nginx_request_body);
@@ -1027,6 +1080,14 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-cookies-set!", nginx_request_cookies_set,
 		  SG_SUBR_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-query-string", nginx_request_query_string,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-original-uri", nginx_request_original_uri,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-request-line", nginx_request_request_line,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-schema", nginx_request_schema,
+		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body,
 		  SG_PROC_NO_SIDE_EFFECT);
 #define HEADER_FIELD(name, cname, n)		\
@@ -1185,6 +1246,10 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
   ngxReq->headers = SG_FALSE;	/* initialise lazily */
   ngxReq->cookies = SG_FALSE;	/* initialise lazily */
   ngxReq->cookies_parsed_p = FALSE;
+  ngxReq->query_string = SG_FALSE; /* initialise lazily */
+  ngxReq->original_uri = SG_FALSE; /* initialise lazily */
+  ngxReq->request_line = SG_FALSE; /* initialise lazily */
+  ngxReq->schema = SG_FALSE; /* initialise lazily */
   ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
   return SG_OBJ(ngxReq);

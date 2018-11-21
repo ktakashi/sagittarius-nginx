@@ -30,6 +30,10 @@
 	    nginx-request-accept-language
 	    nginx-request-headers ;; alist
 	    nginx-request-cookies ;; alist
+	    nginx-request-query-string
+	    nginx-request-original-uri
+	    nginx-request-request-line
+	    ;; nginx-request-schema ;; this seems useless...
 	    nginx-request-input-port
 
 	    nginx-response-output-port

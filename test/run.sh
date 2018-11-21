@@ -81,6 +81,18 @@ curl -si http://localhost:8080/test-app > $tempfile
 check_status '200'
 check_header "X-Sagittarius" [[:digit:]].[[:digit:]].[[:digit:]]
 
+echo 
+echo "Test request"
+# Fragment won't be sent via cURL
+# see: https://curl.haxx.se/mail/lib-2011-11/0178.html
+curl -si 'http://localhost:8080/test-app/acc?k1=v1&k2=v2#frag' > $tempfile
+cat $tempfile
+check_status '200'
+check_content 'uri=/test-app/acc'
+check_content 'query=k1=v1&k2=v2'
+check_content 'original-uri=/test-app/acc\?k1=v1\&k2=v2'
+check_content 'request-line=GET /test-app/acc\?k1=v1\&k2=v2 HTTP/1.1'
+
 echo
 echo "Test cookie"
 curl -si http://localhost:8080/cookie -H "Cookie: key0=value0; key1=value1;" \
