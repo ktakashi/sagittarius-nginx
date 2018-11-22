@@ -1276,16 +1276,7 @@ static SgObject retrieve_procedure(ngx_log_t *log,
 				   ngx_http_sagittarius_conf_t *sg_conf);
 static off_t compute_content_length(ngx_chain_t *out);
 
-static void ngx_http_request_body_init(ngx_http_request_t *r)
-{
-  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"'sagittarius': request_body is initialised %p",
-		r->request_body);
-  
-}
-
-/* Main handler */
-static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
+static ngx_int_t sagittarius_call(ngx_http_request_t *r)
 {
   SgObject req, resp, saved_loadpath, proc;
   volatile SgVM *vm;
@@ -1293,10 +1284,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   ngx_int_t rc;
   ngx_chain_t *out;
   ngx_http_sagittarius_conf_t *sg_conf;
-  
-  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"'sagittarius': Handling Sagittarius request for %V %V.",
-		&r->method_name, &r->uri);
+
   sg_conf = (ngx_http_sagittarius_conf_t *)
     ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   vm = Sg_VM();
@@ -1309,22 +1297,6 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
   proc = retrieve_procedure(r->connection->log, sg_conf);
   if (!SG_PROCEDUREP(proc)) {
     return NGX_HTTP_NOT_FOUND;
-  }
-
-  if (r->headers_in.content_length_n > 0 || r->headers_in.chunked) {
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		  "'sagittarius': reading client body %d",
-		  r->headers_in.content_length_n);
-    do {
-      /* 
-	 Retrying doesn't help us for Expect: 100-continue case.
-	 Not sure how we should handle that... (I hope it's only curl)
-       */
-      rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
-      if (rc != NGX_OK && rc != NGX_AGAIN) {
-	return NGX_HTTP_INTERNAL_SERVER_ERROR;
-      }
-    } while (rc == NGX_AGAIN);
   }
   
   req = make_nginx_request(r);
@@ -1377,6 +1349,35 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
 		  "'sagittarius': Scheme program returned non fixnum.");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
+}
+
+static void ngx_http_request_body_init(ngx_http_request_t *r)
+{
+  /* ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, */
+  /* 		"'sagittarius': content callback"); */
+  /* Just handling the request the same as GET (or no content request) */
+  ngx_http_finalize_request(r, sagittarius_call(r));
+}
+
+/* Main handler */
+static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
+{
+  ngx_int_t rc;
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		"'sagittarius': Handling Sagittarius request for %V %V.",
+		&r->method_name, &r->uri);
+
+  if (r->headers_in.content_length_n > 0 || r->headers_in.chunked) {
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		  "'sagittarius': reading client body %d",
+		  r->headers_in.content_length_n);
+    rc = ngx_http_read_client_request_body(r, ngx_http_request_body_init);
+    if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
+      return rc;
+    }
+    return NGX_DONE;
+  }
+  return sagittarius_call(r);
 }
 
 static ngx_int_t init_base_library(ngx_log_t *log)
