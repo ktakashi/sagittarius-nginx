@@ -3,14 +3,11 @@
  * See Licence.txt for terms and conditions of use
  */
 
-/* ngx_core.h defines LF as a macro which conflicts, so first include
-   this */
-#include <sagittarius.h>
-
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#include <sagittarius.h>
 /* 
    References:
    - https://www.evanmiller.org/nginx-modules-guide.html
