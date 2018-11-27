@@ -89,6 +89,110 @@ ngx_module_t ngx_http_sagittarius_module = {
 typedef struct
 {
   SG_HEADER;
+  /* application context path. i.e. location path */
+  SgObject path;
+  SgObject parameters;		/* parameters */
+} SgNginxContext;
+SG_CLASS_DECL(Sg_NginxContextClass)
+#define SG_CLASS_NGINX_CONTEXT (&Sg_NginxContextClass)
+#define SG_NGINX_CONTEXT(obj)  ((SgNginxContext *)obj)
+#define SG_NGINX_CONTEXTP(obj) SG_XTYPEP(obj, SG_CLASS_NGINX_CONTEXT)
+static void nginx_context_printer(SgObject self, SgPort *port,
+				  SgWriteContext *ctx)
+{
+  Sg_Printf(port, UC("#<nginx-context %A>"), SG_NGINX_CONTEXT(self)->path);
+}
+SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_NginxContextClass, nginx_context_printer);
+
+static SgObject nc_path(SgNginxContext *nc)
+{
+  return nc->path;
+}
+static SgObject nc_parameters(SgNginxContext *nc)
+{
+  return nc->parameters;
+}
+static SgSlotAccessor nc_slots[] = {
+  SG_CLASS_SLOT_SPEC("path",      0, nc_path, NULL),
+  SG_CLASS_SLOT_SPEC("parameters",1, nc_parameters, NULL),
+  { { NULL } }
+};
+
+static SgObject nginx_context_p(SgObject *argv, int argc, void *data)
+{
+  if (argc != 1) {
+    Sg_WrongNumberOfArgumentsViolation(SG_INTERN("nginx-context?"), 1,
+				       argc, SG_NIL);
+  }
+  return SG_MAKE_BOOL(SG_NGINX_CONTEXT(argv[0]));
+}
+static SG_DEFINE_SUBR(nginx_context_p_stub, 1, 0, nginx_context_p,
+		      SG_FALSE, NULL);
+
+
+#define SG_DEFINE_GETTER(who, type, tp, acc, cast, cname)		\
+  static SgObject cname(SgObject *argv, int argc, void *data)		\
+  {									\
+    if (argc != 1) {							\
+      Sg_WrongNumberOfArgumentsViolation(SG_INTERN(who), 1, argc, SG_NIL); \
+    }									\
+    if (!tp(argv[0])) {							\
+      Sg_WrongTypeOfArgumentViolation(SG_INTERN(who),SG_INTERN(type),	\
+				      argv[0], SG_NIL);			\
+    }									\
+    return acc(cast(argv[0]));						\
+  }									\
+  static SG_DEFINE_SUBR(SG_CPP_CAT(cname, _stub), 1, 0, cname,		\
+			SG_FALSE, NULL);
+
+#define SG_DEFINE_SETTER(who, type, tp, setter, cast, cname)		\
+  static SgObject cname(SgObject *argv, int argc, void *data)		\
+  {									\
+    if (argc != 2) {							\
+      Sg_WrongNumberOfArgumentsViolation(SG_INTERN(who), 2, argc, SG_NIL); \
+    }									\
+    if (!tp(argv[0])) {							\
+      Sg_WrongTypeOfArgumentViolation(SG_INTERN(who),SG_INTERN(type),	\
+				      argv[0], SG_NIL);			\
+    }									\
+    setter(cast(argv[0]), argv[1]);					\
+    return SG_UNDEF;							\
+  }									\
+  static SG_DEFINE_SUBR(SG_CPP_CAT(cname, _stub), 2, 0, cname,		\
+			SG_FALSE, NULL);
+
+SG_DEFINE_GETTER("nginx-context-path", "nginx-context",
+		 SG_NGINX_CONTEXTP, nc_path, SG_NGINX_CONTEXT,
+		 nginx_context_path);
+SG_DEFINE_GETTER("nginx-context-parameters", "nginx-context",
+		 SG_NGINX_CONTEXTP, nc_parameters, SG_NGINX_CONTEXT,
+		 nginx_context_parameters);
+static SgObject nginx_context_parameter_ref(SgObject *argv, int argc,
+					    void *data)
+{
+  if (argc != 2) {
+    Sg_WrongNumberOfArgumentsViolation(SG_INTERN("nginx-context-parameter-ref"),
+				       2, argc, SG_NIL);
+  }
+  if (!SG_NGINX_CONTEXTP(argv[0])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-context-parameter-ref"),
+				    SG_INTERN("nginx-context"),
+				    argv[0], SG_NIL);
+  }
+  if (!SG_STRINGP(argv[1])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-context-parameter-ref"),
+				    SG_INTERN("string"),
+				    argv[1], SG_NIL);
+  }
+  return Sg_HashTableRef(SG_HASHTABLE(SG_NGINX_CONTEXT(argv[0])->parameters),
+			 argv[1], SG_FALSE);
+}
+static SG_DEFINE_SUBR(nginx_context_parameter_ref_stub, 2, 0,
+		      nginx_context_parameter_ref, SG_FALSE, NULL);
+			
+typedef struct
+{
+  SG_HEADER;
   SgObject method;
   SgObject uri;
   SgObject headers;
@@ -100,6 +204,7 @@ typedef struct
   SgObject request_line;	/* Request line */
   SgObject schema;		/* http/https */
   SgObject body;		/* binary input port */
+  SgObject context;
   ngx_http_request_t *rawNginxRequest;
   /* TODO maybe cache the builtin values? */
 } SgNginxRequest;
@@ -191,6 +296,11 @@ static SgObject nr_body(SgNginxRequest *nr)
   return nr->body;
 }
 
+static SgObject nr_context(SgNginxRequest *nr)
+{
+  return nr->context;
+}
+
 static SgObject nr_cookies(SgNginxRequest *nr)
 {
   if (SG_FALSEP(nr->cookies)) {
@@ -242,8 +352,9 @@ static SgSlotAccessor nr_slots[] = {
   SG_CLASS_SLOT_SPEC("request-line", 6, nr_request_line, NULL),
   SG_CLASS_SLOT_SPEC("schema",     7, nr_schema, NULL),
   SG_CLASS_SLOT_SPEC("input-port", 8, nr_body, NULL),
+  SG_CLASS_SLOT_SPEC("context", 9, nr_context, NULL),
 #define HEADER_FIELD(name, cname, n)				\
-  SG_CLASS_SLOT_SPEC(#name, n+8, SG_CPP_CAT(nr_, cname), NULL),
+  SG_CLASS_SLOT_SPEC(#name, n+9, SG_CPP_CAT(nr_, cname), NULL),
 #include "builtin_request_fields.inc"
 #undef HEADER_FIELD
   { { NULL } }
@@ -259,37 +370,6 @@ static SgObject nginx_request_p(SgObject *argv, int argc, void *data)
 }
 static SG_DEFINE_SUBR(nginx_request_p_stub, 1, 0, nginx_request_p,
 		      SG_FALSE, NULL);
-
-#define SG_DEFINE_GETTER(who, type, tp, acc, cast, cname)		\
-  static SgObject cname(SgObject *argv, int argc, void *data)		\
-  {									\
-    if (argc != 1) {							\
-      Sg_WrongNumberOfArgumentsViolation(SG_INTERN(who), 1, argc, SG_NIL); \
-    }									\
-    if (!tp(argv[0])) {							\
-      Sg_WrongTypeOfArgumentViolation(SG_INTERN(who),SG_INTERN(type),	\
-				      argv[0], SG_NIL);			\
-    }									\
-    return acc(cast(argv[0]));						\
-  }									\
-  static SG_DEFINE_SUBR(SG_CPP_CAT(cname, _stub), 1, 0, cname,		\
-			SG_FALSE, NULL);
-
-#define SG_DEFINE_SETTER(who, type, tp, setter, cast, cname)		\
-  static SgObject cname(SgObject *argv, int argc, void *data)		\
-  {									\
-    if (argc != 2) {							\
-      Sg_WrongNumberOfArgumentsViolation(SG_INTERN(who), 2, argc, SG_NIL); \
-    }									\
-    if (!tp(argv[0])) {							\
-      Sg_WrongTypeOfArgumentViolation(SG_INTERN(who),SG_INTERN(type),	\
-				      argv[0], SG_NIL);			\
-    }									\
-    setter(cast(argv[0]), argv[1]);					\
-    return SG_UNDEF;							\
-  }									\
-  static SG_DEFINE_SUBR(SG_CPP_CAT(cname, _stub), 2, 0, cname,		\
-			SG_FALSE, NULL);
 
 SG_DEFINE_GETTER("nginx-request-method", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_method, SG_NGINX_REQUEST,
@@ -321,6 +401,9 @@ SG_DEFINE_GETTER("nginx-request-schema", "nginx-request",
 SG_DEFINE_GETTER("nginx-request-input-port", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_body, SG_NGINX_REQUEST,
 		 nginx_request_body);
+SG_DEFINE_GETTER("nginx-request-context", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_context, SG_NGINX_REQUEST,
+		 nginx_request_context);
 #define HEADER_FIELD(name, cname, n)					\
   SG_DEFINE_GETTER("nginx-request-"#name, "nginx-request",		\
 		   SG_NGINX_REQUESTP, SG_CPP_CAT(nr_, cname),		\
@@ -368,7 +451,6 @@ static void nres_content_type_set(SgNginxResponse *nr, SgObject v)
   nr->request->headers_out.content_type.len = ngx_strlen(r);
   nr->request->headers_out.content_type.data = (unsigned char *)r;
 }
-
 
 static SgObject nres_headers(SgNginxResponse *nr)
 {
@@ -1030,6 +1112,9 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 		"Initialising '(sagittarius nginx internal)' library");
   lib = Sg_FindLibrary(sym, TRUE);
 
+  Sg_InitStaticClassWithMeta(SG_CLASS_NGINX_CONTEXT, UC("<nginx-context>"),
+			     SG_LIBRARY(lib), NULL,
+			     SG_FALSE, nc_slots, 0);
   Sg_InitStaticClassWithMeta(SG_CLASS_NGINX_REQUEST, UC("<nginx-request>"),
 			     SG_LIBRARY(lib), NULL,
 			     SG_FALSE, nr_slots, 0);
@@ -1038,7 +1123,19 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 			     SG_FALSE, nres_slots, 0);
   Sg_InitStaticClass(SG_CLASS_RESPONSE_OUTPUT_PORT, UC("<nginx-response-port>"),
 		     SG_LIBRARY(lib), NULL, 0);
- 
+
+  Sg_InsertBinding(SG_LIBRARY(lib),
+		   SG_INTERN("nginx-context?"), &nginx_context_p_stub);
+  SG_PROCEDURE_NAME(&nginx_context_p_stub) = SG_MAKE_STRING("nginx-context?");
+  SG_PROCEDURE_TRANSPARENT(&nginx_context_p_stub) = SG_PROC_TRANSPARENT;
+
+  Sg_InsertBinding(SG_LIBRARY(lib), SG_INTERN("nginx-context-parameter-ref"),
+		   &nginx_context_parameter_ref_stub);
+  SG_PROCEDURE_NAME(&nginx_context_parameter_ref_stub) =
+    SG_MAKE_STRING("nginx-context-parameter-ref");
+  SG_PROCEDURE_TRANSPARENT(&nginx_context_parameter_ref_stub) =
+    SG_PROC_NO_SIDE_EFFECT;
+  
   Sg_InsertBinding(SG_LIBRARY(lib),
 		   SG_INTERN("nginx-request?"), &nginx_request_p_stub);
   SG_PROCEDURE_NAME(&nginx_request_p_stub) = SG_MAKE_STRING("nginx-request?");
@@ -1079,6 +1176,11 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
     SG_PROCEDURE_TRANSPARENT(&SG_CPP_CAT(cname, _stub)) = effect;	\
   } while (0)
   
+  INSERT_ACCESSOR("nginx-context-path", nginx_context_path,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-context-parameters", nginx_context_parameters,
+		  SG_PROC_NO_SIDE_EFFECT);
+
   INSERT_ACCESSOR("nginx-request-method", nginx_request_method,
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-uri", nginx_request_uri,
@@ -1098,6 +1200,8 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   INSERT_ACCESSOR("nginx-request-schema", nginx_request_schema,
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-input-port", nginx_request_body,
+		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-context", nginx_request_context,
 		  SG_PROC_NO_SIDE_EFFECT);
 #define HEADER_FIELD(name, cname, n)		\
   INSERT_ACCESSOR("nginx-request-" #name, SG_CPP_CAT(nginx_request_, cname), \
@@ -1262,6 +1366,8 @@ static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
   return NGX_CONF_OK;
 }
 
+static SgObject nginx_context = SG_UNDEF;
+
 static SgObject make_nginx_request(ngx_http_request_t *req)
 {
   SgNginxRequest *ngxReq = SG_NEW(SgNginxRequest);
@@ -1277,6 +1383,7 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
   ngxReq->schema = SG_FALSE; /* initialise lazily */
   ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
+  ngxReq->context = nginx_context;
   return SG_OBJ(ngxReq);
 }
 
@@ -1301,6 +1408,19 @@ static SgObject retrieve_procedure(ngx_log_t *log,
 				   ngx_http_sagittarius_conf_t *sg_conf);
 static off_t compute_content_length(ngx_chain_t *out);
 
+static SgObject make_nginx_context(ngx_http_request_t *r)
+{
+  SgNginxContext *c = SG_NEW(SgNginxContext);
+  SG_SET_CLASS(c, SG_CLASS_NGINX_CONTEXT);
+  c->path = SG_FALSE;		/* dummy */
+  /* TODO initSize */
+  c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, 12);
+  /* TODO poplulate parameters */
+  /* mark as immutable for Scheme world*/
+  SG_HASHTABLE(c->parameters)->immutablep = TRUE;
+  return SG_OBJ(c);
+}
+
 static ngx_int_t init_context(ngx_http_request_t *r)
 {
   if (SG_UNDEFP(nginx_dispatch)) {
@@ -1313,7 +1433,7 @@ static ngx_int_t init_context(ngx_http_request_t *r)
       if (init_base_library(r->connection->log) != NGX_OK) {
 	return NGX_HTTP_INTERNAL_SERVER_ERROR;
       }
-      /* TODO initialise context */
+      nginx_context = make_nginx_context(r);
     }
     if (ngx_thread_mutex_unlock(&GLOBAL_LOCK, r->connection->log) != NGX_OK) {
       ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,

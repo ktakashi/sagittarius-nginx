@@ -35,12 +35,18 @@
 	    nginx-request-request-line
 	    ;; nginx-request-schema ;; this seems useless...
 	    nginx-request-input-port
+	    nginx-request-context
 
 	    nginx-response-output-port
 	    nginx-response-headers
 	    nginx-response-header-add!
 	    nginx-response-header-set!
 	    nginx-response-header-remove!
+
+	    nginx-context?
+	    nginx-context-path
+	    nginx-context-parameter-ref
+	    nginx-context-parameters
 	    )
     (import (rnrs)
 	    (rfc cookie)
