@@ -15,9 +15,11 @@
 */
 /* 
 The configuration looks like this
-sagittarius $entry-point{
+sagittarius $entry-point {
   load_path foo/bar /baz/; # up to n path (haven't decided the number...)
   library "(your web library)";
+  parameter var0 value0;
+  parameter var1 varlu1;
 }
 
 We do not use SgObject here. I'm not sure when the configuration parsing 
@@ -28,6 +30,8 @@ typedef struct {
   ngx_array_t *load_paths;	/* array of ngx_str_t */
   ngx_str_t library;		/* webapp library */
   ngx_str_t procedure;		/* entry point */
+  /* context parameters, this is a temporary storage */
+  ngx_array_t *parameters;	/* array of ngx_table_elt_t */
 } ngx_http_sagittarius_conf_t;
 
 static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
@@ -1162,9 +1166,10 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 				  ngx_command_t *dummy,
 				  void *conf)
 {
-  ngx_uint_t i;
+  ngx_uint_t                  i;
   ngx_http_sagittarius_conf_t *sg_conf;
   ngx_str_t *value, *elts, *prefix;
+  ngx_table_elt_t *e;
   
   sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   value = cf->args->elts;
@@ -1205,6 +1210,20 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
       return NGX_CONF_ERROR;
     }
     sg_conf->library = value[1];
+  } else if (ngx_strcmp(value[0].data, "parameter") == 0) {
+    if (!sg_conf->parameters) {
+      sg_conf->parameters
+	= ngx_array_create(cf->pool, 1, sizeof(ngx_table_elt_t));
+    }
+    if (cf->args->nelts != 3) {
+      ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		    "'sagittarius': 'parameter' must contain "
+		    "2 elements (var and val)");
+      return NGX_CONF_ERROR;
+    }
+    e = ngx_array_push(sg_conf->parameters);
+    e->key = value[1];
+    e->value = value[2];
   } else {
     ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		  "'sagittarius': unknown directive %V", &value[0]);
@@ -1225,6 +1244,7 @@ static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf)
   conf->library = nstr;
   conf->procedure = nstr;
   conf->load_paths = NULL;
+  conf->parameters = NULL;
   return conf;
 }
 
