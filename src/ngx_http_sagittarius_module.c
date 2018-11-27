@@ -1008,11 +1008,19 @@ static SgObject make_response_output_port(ngx_http_request_t *request)
 }
 
 static SgObject nginx_dispatch = SG_UNDEF;
+static ngx_thread_mutex_t GLOBAL_LOCK;
+
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 {
   SgObject sym, lib;
   ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
 		"'sagittarius': Initialising Sagittarius process");
+
+  if (ngx_thread_mutex_create(&GLOBAL_LOCK, cycle->log) != NGX_OK) {
+    ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
+		"'sagittarius': Failed to initialise the mutex");
+    return NGX_ERROR;
+  }
   /* Initialise the sagittarius VM */
   Sg_Init();
 
@@ -1293,6 +1301,29 @@ static SgObject retrieve_procedure(ngx_log_t *log,
 				   ngx_http_sagittarius_conf_t *sg_conf);
 static off_t compute_content_length(ngx_chain_t *out);
 
+static ngx_int_t init_context(ngx_http_request_t *r)
+{
+  if (SG_UNDEFP(nginx_dispatch)) {
+    if (ngx_thread_mutex_lock(&GLOBAL_LOCK, r->connection->log) != NGX_OK) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		    "'sagittarius': Failed to lock the mutex");
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    if (SG_UNDEFP(nginx_dispatch)) {
+      if (init_base_library(r->connection->log) != NGX_OK) {
+	return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
+      /* TODO initialise context */
+    }
+    if (ngx_thread_mutex_unlock(&GLOBAL_LOCK, r->connection->log) != NGX_OK) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		    "'sagittarius': Failed to unlock the mutex");
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+  }
+  return NGX_OK;
+}
+
 static ngx_int_t sagittarius_call(ngx_http_request_t *r)
 {
   SgObject req, resp, saved_loadpath, proc;
@@ -1306,11 +1337,11 @@ static ngx_int_t sagittarius_call(ngx_http_request_t *r)
     ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   vm = Sg_VM();
   saved_loadpath = setup_load_path(vm, r->connection->log, sg_conf);
-  if (SG_UNDEFP(nginx_dispatch)) {
-    if (init_base_library(r->connection->log) != NGX_OK) {
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-  }
+  /* base library can also be configured load path, so this must be called
+     after the load path setup */
+  rc = init_context(r);
+  if (rc != NGX_OK) return rc;
+  
   proc = retrieve_procedure(r->connection->log, sg_conf);
   if (!SG_PROCEDUREP(proc)) {
     return NGX_HTTP_NOT_FOUND;
@@ -1394,7 +1425,9 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     }
     return NGX_DONE;
   }
-  return sagittarius_call(r);
+  rc = sagittarius_call(r);
+  ngx_http_finalize_request(r, rc);
+  return rc;
 }
 
 static ngx_int_t init_base_library(ngx_log_t *log)
