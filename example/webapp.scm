@@ -8,9 +8,12 @@
   (define out (transcoded-port (nginx-response-output-port response)
 			       (native-transcoder)))
   (let ((echo (get-bytevector-all (nginx-request-input-port request))))
-    (if (eof-object? echo)
-	(put-string out "Test web application!!\n")
-	(put-string out (utf8->string echo))))
+    (cond ((eof-object? echo)
+	   (put-string out "Test web application!!\n")
+	   (put-string out (nginx-context-path (nginx-request-context request)))
+	   (newline out))
+	  (else (put-string out (utf8->string echo)))))
+
   (nginx-response-header-add! response "Foo" "bar")
   (values 200 'text/plain))
 

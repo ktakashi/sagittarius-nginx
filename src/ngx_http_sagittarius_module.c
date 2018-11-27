@@ -1267,8 +1267,7 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
     return NGX_CONF_ERROR;
   }
   
-  clcf = (ngx_http_core_loc_conf_t *)
-    ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+  clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
   clcf->handler = ngx_http_sagittarius_handler;
   
   return NGX_CONF_OK;
@@ -1410,9 +1409,12 @@ static off_t compute_content_length(ngx_chain_t *out);
 
 static SgObject make_nginx_context(ngx_http_request_t *r)
 {
+  ngx_http_core_loc_conf_t *clcf;
   SgNginxContext *c = SG_NEW(SgNginxContext);
   SG_SET_CLASS(c, SG_CLASS_NGINX_CONTEXT);
-  c->path = SG_FALSE;		/* dummy */
+
+  clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+  c->path = ngx_str_to_string(&clcf->name);
   /* TODO initSize */
   c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, 12);
   /* TODO poplulate parameters */
