@@ -40,6 +40,7 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 static char* ngx_http_sagittarius(ngx_conf_t *cf,
 				  ngx_command_t *dummy,
 				  void *conf);
+static ngx_int_t ngx_http_sagittarius_postconfiguration(ngx_conf_t *cf);
 static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
 						 void *p, void *c);
@@ -59,7 +60,7 @@ static ngx_command_t ngx_http_sagittarius_commands[] = {
 
 static ngx_http_module_t ngx_http_sagittarius_module_ctx = {
   NULL, 			/* preconfiguration */
-  NULL,				/* postconfiguration */
+  ngx_http_sagittarius_postconfiguration, /* postconfiguration */
   NULL, 			/* create main confiugraetion */
   NULL, 			/* init main configuration */
   NULL,				/* create server configuration */
@@ -1091,7 +1092,7 @@ static SgObject make_response_output_port(ngx_http_request_t *request)
 }
 
 static SgObject nginx_dispatch = SG_UNDEF;
-static ngx_thread_mutex_t GLOBAL_LOCK;
+static ngx_thread_mutex_t global_lock;
 
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 {
@@ -1099,7 +1100,7 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
 		"'sagittarius': Initialising Sagittarius process");
 
-  if (ngx_thread_mutex_create(&GLOBAL_LOCK, cycle->log) != NGX_OK) {
+  if (ngx_thread_mutex_create(&global_lock, cycle->log) != NGX_OK) {
     ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
 		"'sagittarius': Failed to initialise the mutex");
     return NGX_ERROR;
@@ -1233,6 +1234,33 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   return NGX_OK;
 }
 
+#if 0
+static ngx_hash_t nginx_contexts;
+static ngx_hash_keys_arrays_t nginx_context_keys;
+#endif
+static ngx_int_t ngx_http_sagittarius_postconfiguration(ngx_conf_t *cf)
+{
+#if 0
+  ngx_http_sagittarius_conf_t *sg_conf;
+  ngx_hash_init_t  hash;
+
+  sg_conf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_sagittarius_module);
+
+  hash.hash = &nginx_contexts;
+  hash.key = ngx_hash_key;
+  hash.max_size = 512;
+  hash.bucket_size = ngx_align(64, ngx_cacheline_size);
+  hash.name = "nginx_contexts";
+  hash.pool = cf->pool;
+  hash.temp_pool = cf->temp_pool;
+  
+  nginx_context_keys.pool = cf->pool;
+  nginx_context_keys.temp_pool = cf->temp_pool;
+  ngx_hash_keys_array_init(&nginx_context_keys, NGX_HASH_SMALL);
+#endif
+  return NGX_OK;
+}
+
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r);
 static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 					ngx_command_t *cmd,
@@ -1304,17 +1332,14 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     elts = ngx_array_push_n(sg_conf->load_paths, cf->args->nelts-1);
 
     for (i = 0; i < cf->args->nelts-1; i++) {
-      ngx_str_t *s, *v;
-      v = &value[i+1];
-      s = &elts[i];
-      *s = *v;
-      if (ngx_get_full_name(cf->pool, prefix, s) != NGX_OK) {
+      elts[i] = value[i+1];
+      if (ngx_get_full_name(cf->pool, prefix, &elts[i]) != NGX_OK) {
 	ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		      "'sagittarius': 'load_path' failed to get load path ");
 	return NGX_CONF_ERROR;
       }
       ngx_log_error(NGX_LOG_DEBUG, cf->log, 0,
-		    "'sagittarius': 'load_path' %V", s);
+		    "'sagittarius': 'load_path' %V", &elts[i]);
 
     }
   } else if (ngx_strcmp(value[0].data, "library") == 0) {
@@ -1326,10 +1351,15 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     }
     sg_conf->library = value[1];
   } else if (ngx_strcmp(value[0].data, "parameter") == 0) {
-    ngx_table_elt_t *e;
+    ngx_keyval_t *e;
     if (!sg_conf->parameters) {
+      /* 
+	 allocate at least one here since we don't use ngx_array_push_n.
+	 I think it's a bug of NGINX ngx_array_push since it doesn't handle
+	 zero initial array properly...
+       */
       sg_conf->parameters
-	= ngx_array_create(cf->pool, 0, sizeof(ngx_table_elt_t));
+	= ngx_array_create(cf->pool, 1, sizeof(ngx_keyval_t));
       if (!sg_conf->parameters) {
 	ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		      "'sagittarius': Failed to allocate parameter array");
@@ -1342,7 +1372,7 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 		    "2 elements (var and val)");
       return NGX_CONF_ERROR;
     }
-    e = ngx_array_push_n(sg_conf->parameters, 1);
+    e = ngx_array_push(sg_conf->parameters);
     e->key = value[1];
     e->value = value[2];
   } else {
@@ -1373,7 +1403,66 @@ static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
   return NGX_CONF_OK;
 }
 
-static SgObject nginx_context = SG_UNDEF;
+static SgObject make_nginx_context(ngx_http_request_t *r)
+{
+  ngx_http_core_loc_conf_t *clcf;
+  ngx_http_sagittarius_conf_t *sg_conf;
+  ngx_array_t *params;
+  ngx_keyval_t *value;
+  ngx_uint_t i;
+  SgNginxContext *c = SG_NEW(SgNginxContext);
+  SG_SET_CLASS(c, SG_CLASS_NGINX_CONTEXT);
+
+  clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+  sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
+  c->path = ngx_str_to_string(&clcf->name);
+  params = sg_conf->parameters;
+  if (params) {
+    c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, params->nelts);
+    value = params->elts;
+    for (i = 0; i < params->nelts; i++) {
+      ngx_keyval_t *e = &value[i];
+      Sg_HashTableSet(c->parameters,
+		      ngx_str_to_string(&e->key),
+		      ngx_str_to_string(&e->value),
+		      0);
+    }
+  } else {
+    c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, 0);
+  }
+  /* mark as immutable for Scheme world*/
+  SG_HASHTABLE(c->parameters)->immutablep = TRUE;
+  return SG_OBJ(c);
+}
+
+static SgObject get_context(ngx_http_request_t *r)
+{
+  /* TODO cache it */
+#if 0
+  ngx_http_core_loc_conf_t *clcf;
+  SgObject context;
+  clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+  /* get from hashtable */
+  &clcf->name;
+  if (ngx_thread_mutex_lock(&global_lock, r->connection->log) != NGX_OK) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "'sagittarius': Failed to lock the mutex");
+    return SG_UNDEF;
+  }
+  
+  context = make_nginx_context(r);
+
+  if (ngx_thread_mutex_unlock(&global_lock, r->connection->log) != NGX_OK) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "'sagittarius': Failed to unlock the mutex");
+    return SG_UNDEF;
+  }
+  
+  return context;
+#endif
+  return make_nginx_context(r);
+}
+
 
 static SgObject make_nginx_request(ngx_http_request_t *req)
 {
@@ -1390,7 +1479,7 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
   ngxReq->schema = SG_FALSE; /* initialise lazily */
   ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
-  ngxReq->context = nginx_context;
+  ngxReq->context = get_context(req);
   return SG_OBJ(ngxReq);
 }
 
@@ -1415,61 +1504,6 @@ static SgObject retrieve_procedure(ngx_log_t *log,
 				   ngx_http_sagittarius_conf_t *sg_conf);
 static off_t compute_content_length(ngx_chain_t *out);
 
-static SgObject make_nginx_context(ngx_http_request_t *r)
-{
-  ngx_http_core_loc_conf_t *clcf;
-  ngx_http_sagittarius_conf_t *sg_conf;
-  ngx_array_t *params;
-  ngx_table_elt_t *value;
-  ngx_uint_t i;
-  SgNginxContext *c = SG_NEW(SgNginxContext);
-  SG_SET_CLASS(c, SG_CLASS_NGINX_CONTEXT);
-
-  clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
-  sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
-  c->path = ngx_str_to_string(&clcf->name);
-  params = sg_conf->parameters;
-  if (params) {
-    c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, params->nelts);
-    value = params->elts;
-    for (i = 0; i < params->nelts; i++) {
-      ngx_table_elt_t *e = &value[i];
-      Sg_HashTableSet(c->parameters,
-		      ngx_str_to_string(&e->key),
-		      ngx_str_to_string(&e->value),
-		      0);
-    }
-  } else {
-    c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, 0);
-  }
-  /* mark as immutable for Scheme world*/
-  SG_HASHTABLE(c->parameters)->immutablep = TRUE;
-  return SG_OBJ(c);
-}
-
-static ngx_int_t init_context(ngx_http_request_t *r)
-{
-  if (SG_UNDEFP(nginx_dispatch)) {
-    if (ngx_thread_mutex_lock(&GLOBAL_LOCK, r->connection->log) != NGX_OK) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		    "'sagittarius': Failed to lock the mutex");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    if (SG_UNDEFP(nginx_dispatch)) {
-      if (init_base_library(r->connection->log) != NGX_OK) {
-	return NGX_HTTP_INTERNAL_SERVER_ERROR;
-      }
-      nginx_context = make_nginx_context(r);
-    }
-    if (ngx_thread_mutex_unlock(&GLOBAL_LOCK, r->connection->log) != NGX_OK) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		    "'sagittarius': Failed to unlock the mutex");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-  }
-  return NGX_OK;
-}
-
 static ngx_int_t sagittarius_call(ngx_http_request_t *r)
 {
   SgObject req, resp, saved_loadpath, proc;
@@ -1482,10 +1516,12 @@ static ngx_int_t sagittarius_call(ngx_http_request_t *r)
   sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   vm = Sg_VM();
   saved_loadpath = setup_load_path(vm, r->connection->log, sg_conf);
-  /* base library can also be configured load path, so this must be called
-     after the load path setup */
-  rc = init_context(r);
-  if (rc != NGX_OK) return rc;
+  /* The dispatcher will always be the same so no lock needed */
+  if (SG_UNDEFP(nginx_dispatch)) {
+    if (init_base_library(r->connection->log) != NGX_OK) {
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+  }
   
   proc = retrieve_procedure(r->connection->log, sg_conf);
   if (!SG_PROCEDUREP(proc)) {

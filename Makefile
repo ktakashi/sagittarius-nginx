@@ -42,10 +42,15 @@ uninstall:
 	$(RM) $(DESTDIR)$(SAGITTARIUS_SITELIB)/sagittarius/nginx.scm
 
 run:
-	$(MAKE) -C build run
+	$(MAKE) -C build run NGINX_VERSION=$(NGINX_VERSION)\
+	  SAGITTARIUS_CONFIG=$(SAGITTARIUS_CONFIG)
 
 stop:
 	$(MAKE) -C build stop
+
+valgrind:
+	$(MAKE) -C build valgrind NGINX_VERSION=$(NGINX_VERSION)\
+	  SAGITTARIUS_CONFIG=$(SAGITTARIUS_CONFIG)
 
 check:
 	$(MAKE) -C build check

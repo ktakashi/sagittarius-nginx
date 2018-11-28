@@ -45,6 +45,12 @@ run: prep example
 	  -c $(shell pwd)/../conf/example.conf \
 	  -p $(shell pwd)/$(SANDBOX)
 
+valgrind: prep
+	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
+	./nginx-$(NGINX_VERSION)/objs/nginx \
+	  -c $(shell pwd)/../conf/example.conf \
+	  -p $(shell pwd)/$(SANDBOX)
+
 example:
 	mkdir -p $(SANDBOX)/lib $(SANDBOX)/example
 	cp -r ../example/* $(SANDBOX)/example
