@@ -80,6 +80,9 @@ echo "Test header"
 curl -si http://localhost:8080/test-app > $tempfile
 check_status '200'
 check_header "X-Sagittarius" [[:digit:]].[[:digit:]].[[:digit:]]
+check_header "X-Context-Parameter" "value0"
+check_header "X-Context-Parameter" "value1"
+check_header "X-Context-Path" "/test-app"
 
 echo 
 echo "Test request"

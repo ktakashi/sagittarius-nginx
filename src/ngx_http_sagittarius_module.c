@@ -604,7 +604,8 @@ static void ngx_add_header(SgObject res, SgObject name, SgObject value)
   } else {
     unsigned char *n;
     ngx_table_elt_t *e;
-    e = (ngx_table_elt_t *)ngx_list_push(&r->headers_out.headers);
+    
+    e = ngx_list_push(&r->headers_out.headers);
     n = (unsigned char *)Sg_Utf32sToUtf8s(name);
     e->key.data = n;
     e->key.len = ngx_strlen(n);
@@ -701,12 +702,12 @@ static SgObject nginx_response_add_header(SgObject *argv, int argc, void *data)
 				    SG_INTERN("nginx-response"),
 				    argv[0], SG_NIL);
   }
-  if (!SG_STRING(argv[1])) {
+  if (!SG_STRINGP(argv[1])) {
     Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-add!"),
 				    SG_INTERN("string"),
 				    argv[1], SG_NIL);
   }
-  if (!SG_STRING(argv[2])) {
+  if (!SG_STRINGP(argv[2])) {
     Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-add!"),
 				    SG_INTERN("string"),
 				    argv[2], SG_NIL);
@@ -728,12 +729,12 @@ static SgObject nginx_response_set_header(SgObject *argv, int argc, void *data)
 				    SG_INTERN("nginx-response"),
 				    argv[0], SG_NIL);
   }
-  if (!SG_STRING(argv[1])) {
+  if (!SG_STRINGP(argv[1])) {
     Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-set!"),
 				    SG_INTERN("string"),
 				    argv[1], SG_NIL);
   }
-  if (!SG_STRING(argv[2])) {
+  if (!SG_STRINGP(argv[2])) {
     Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-set!"),
 				    SG_INTERN("string"),
 				    argv[2], SG_NIL);
@@ -756,7 +757,7 @@ static SgObject nginx_response_del_header(SgObject *argv, int argc, void *data)
 				    SG_INTERN("nginx-response"),
 				    argv[0], SG_NIL);
   }
-  if (!SG_STRING(argv[1])) {
+  if (!SG_STRINGP(argv[1])) {
     Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-response-header-remove!"),
 				    SG_INTERN("string"),
 				    argv[1], SG_NIL);
@@ -1280,7 +1281,6 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
   ngx_uint_t                  i;
   ngx_http_sagittarius_conf_t *sg_conf;
   ngx_str_t *value, *elts, *prefix;
-  ngx_table_elt_t *e;
   
   sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   value = cf->args->elts;
@@ -1294,6 +1294,11 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     }
     if (!sg_conf->load_paths) {
       sg_conf->load_paths = ngx_array_create(cf->pool, 0, sizeof(ngx_str_t));
+      if (!sg_conf->load_paths) {
+	ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		      "'sagittarius': Failed to allocate load path array");
+	return NGX_CONF_ERROR;
+      }
     }
     prefix = &cf->cycle->prefix;
     elts = ngx_array_push_n(sg_conf->load_paths, cf->args->nelts-1);
@@ -1301,9 +1306,8 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     for (i = 0; i < cf->args->nelts-1; i++) {
       ngx_str_t *s, *v;
       v = &value[i+1];
-      s = elts+i;
-      s->data = v->data;
-      s->len = v->len;
+      s = &elts[i];
+      *s = *v;
       if (ngx_get_full_name(cf->pool, prefix, s) != NGX_OK) {
 	ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		      "'sagittarius': 'load_path' failed to get load path ");
@@ -1322,9 +1326,15 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     }
     sg_conf->library = value[1];
   } else if (ngx_strcmp(value[0].data, "parameter") == 0) {
+    ngx_table_elt_t *e;
     if (!sg_conf->parameters) {
       sg_conf->parameters
-	= ngx_array_create(cf->pool, 1, sizeof(ngx_table_elt_t));
+	= ngx_array_create(cf->pool, 0, sizeof(ngx_table_elt_t));
+      if (!sg_conf->parameters) {
+	ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		      "'sagittarius': Failed to allocate parameter array");
+	return NGX_CONF_ERROR;
+      }
     }
     if (cf->args->nelts != 3) {
       ngx_log_error(NGX_LOG_ERR, cf->log, 0,
@@ -1332,14 +1342,13 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 		    "2 elements (var and val)");
       return NGX_CONF_ERROR;
     }
-    e = ngx_array_push(sg_conf->parameters);
+    e = ngx_array_push_n(sg_conf->parameters, 1);
     e->key = value[1];
     e->value = value[2];
   } else {
     ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		  "'sagittarius': unknown directive %V", &value[0]);
   }
-
   return NGX_CONF_OK;
 }
 
@@ -1347,8 +1356,7 @@ static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf)
 {
   ngx_str_t nstr = ngx_null_string;
   ngx_http_sagittarius_conf_t *conf;
-  conf = (ngx_http_sagittarius_conf_t *)
-    ngx_palloc(cf->pool, sizeof(ngx_http_sagittarius_conf_t));
+  conf = ngx_palloc(cf->pool, sizeof(ngx_http_sagittarius_conf_t));
   if (!conf) {
     return NGX_CONF_ERROR;
   }
@@ -1410,14 +1418,30 @@ static off_t compute_content_length(ngx_chain_t *out);
 static SgObject make_nginx_context(ngx_http_request_t *r)
 {
   ngx_http_core_loc_conf_t *clcf;
+  ngx_http_sagittarius_conf_t *sg_conf;
+  ngx_array_t *params;
+  ngx_table_elt_t *value;
+  ngx_uint_t i;
   SgNginxContext *c = SG_NEW(SgNginxContext);
   SG_SET_CLASS(c, SG_CLASS_NGINX_CONTEXT);
 
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+  sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   c->path = ngx_str_to_string(&clcf->name);
-  /* TODO initSize */
-  c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, 12);
-  /* TODO poplulate parameters */
+  params = sg_conf->parameters;
+  if (params) {
+    c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, params->nelts);
+    value = params->elts;
+    for (i = 0; i < params->nelts; i++) {
+      ngx_table_elt_t *e = &value[i];
+      Sg_HashTableSet(c->parameters,
+		      ngx_str_to_string(&e->key),
+		      ngx_str_to_string(&e->value),
+		      0);
+    }
+  } else {
+    c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, 0);
+  }
   /* mark as immutable for Scheme world*/
   SG_HASHTABLE(c->parameters)->immutablep = TRUE;
   return SG_OBJ(c);
@@ -1455,8 +1479,7 @@ static ngx_int_t sagittarius_call(ngx_http_request_t *r)
   ngx_chain_t *out;
   ngx_http_sagittarius_conf_t *sg_conf;
 
-  sg_conf = (ngx_http_sagittarius_conf_t *)
-    ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
+  sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   vm = Sg_VM();
   saved_loadpath = setup_load_path(vm, r->connection->log, sg_conf);
   /* base library can also be configured load path, so this must be called

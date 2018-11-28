@@ -9,6 +9,7 @@
   (define out (transcoded-port (nginx-response-output-port response)
 			       (native-transcoder)))
   (define uri (nginx-request-uri request))
+  (define context (nginx-request-context request))
   (define (put-key&value out key value)
     (put-string out key) (put-string out "=")
     (put-string out value) (newline out))
@@ -21,7 +22,13 @@
 	(else
 	 (put-string out "Test application\n")
 	 (nginx-response-header-add! response "X-Sagittarius"
-				     (sagittarius-version))))
+				     (sagittarius-version))
+	 (nginx-response-header-add! response "X-Context-Parameter"
+	   (nginx-context-parameter-ref context "key0"))
+	 (nginx-response-header-add! response "X-Context-Parameter"
+	   (nginx-context-parameter-ref context "key1"))
+	 (nginx-response-header-add! response "X-Context-Path"
+	   (nginx-context-path context))))
   (values 200 'text/plain))
 
 )
