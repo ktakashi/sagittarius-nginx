@@ -40,7 +40,7 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 static char* ngx_http_sagittarius(ngx_conf_t *cf,
 				  ngx_command_t *dummy,
 				  void *conf);
-static ngx_int_t ngx_http_sagittarius_postconfiguration(ngx_conf_t *cf);
+static ngx_int_t ngx_http_sagittarius_preconfiguration(ngx_conf_t *cf);
 static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
 						 void *p, void *c);
@@ -59,8 +59,8 @@ static ngx_command_t ngx_http_sagittarius_commands[] = {
 };
 
 static ngx_http_module_t ngx_http_sagittarius_module_ctx = {
-  NULL, 			/* preconfiguration */
-  ngx_http_sagittarius_postconfiguration, /* postconfiguration */
+  ngx_http_sagittarius_preconfiguration, /* preconfiguration */
+  NULL,				/* postconfiguration */
   NULL, 			/* create main confiugraetion */
   NULL, 			/* init main configuration */
   NULL,				/* create server configuration */
@@ -1234,30 +1234,17 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   return NGX_OK;
 }
 
-#if 0
-static ngx_hash_t nginx_contexts;
-static ngx_hash_keys_arrays_t nginx_context_keys;
-#endif
-static ngx_int_t ngx_http_sagittarius_postconfiguration(ngx_conf_t *cf)
+static ngx_rbtree_t       nginx_contexts;
+static ngx_rbtree_node_t  sentinel;
+typedef struct
 {
-#if 0
-  ngx_http_sagittarius_conf_t *sg_conf;
-  ngx_hash_init_t  hash;
+  ngx_str_node_t sn;
+  SgObject       context;
+} nginx_context_node_t;
 
-  sg_conf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_sagittarius_module);
-
-  hash.hash = &nginx_contexts;
-  hash.key = ngx_hash_key;
-  hash.max_size = 512;
-  hash.bucket_size = ngx_align(64, ngx_cacheline_size);
-  hash.name = "nginx_contexts";
-  hash.pool = cf->pool;
-  hash.temp_pool = cf->temp_pool;
-  
-  nginx_context_keys.pool = cf->pool;
-  nginx_context_keys.temp_pool = cf->temp_pool;
-  ngx_hash_keys_array_init(&nginx_context_keys, NGX_HASH_SMALL);
-#endif
+static ngx_int_t ngx_http_sagittarius_preconfiguration(ngx_conf_t *cf)
+{
+  ngx_rbtree_init(&nginx_contexts, &sentinel, ngx_str_rbtree_insert_value);
   return NGX_OK;
 }
 
@@ -1271,9 +1258,33 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
   ngx_str_t                   *value;
   ngx_http_core_loc_conf_t    *clcf;
   ngx_http_sagittarius_conf_t *sg_conf;
+  uint32_t                     hash;
+  nginx_context_node_t        *node;
   ngx_log_error(NGX_LOG_DEBUG, cf->log, 0,
-		"Handling Sagittarius configuration");
+		"'sagittarius': Handling Sagittarius configuration");
 
+  clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+  hash = ngx_crc32_long(clcf->name.data, clcf->name.len);
+  node = (nginx_context_node_t *)
+    ngx_str_rbtree_lookup(&nginx_contexts, &clcf->name, hash);
+  if (!node) {
+    /* okay insert it */
+    node = ngx_palloc(cf->pool, sizeof(nginx_context_node_t));
+    if (!node) {
+      ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		    "'sagittarius': Failed to allocate context node");
+      return NGX_CONF_ERROR;
+    }
+    node->sn.node.key = hash;
+    node->sn.str = clcf->name;
+    node->context = SG_FALSE;
+    /* 
+       the sn.node is the top most location of the struct. thus inserthing
+       this also means inserting the node itself.
+     */
+    ngx_rbtree_insert(&nginx_contexts, &node->sn.node);
+  }
+  
   value = cf->args->elts;
   sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   sg_conf->procedure = (ngx_str_t)value[1];
@@ -1296,7 +1307,6 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
     return NGX_CONF_ERROR;
   }
   
-  clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
   clcf->handler = ngx_http_sagittarius_handler;
   
   return NGX_CONF_OK;
@@ -1437,30 +1447,42 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
 
 static SgObject get_context(ngx_http_request_t *r)
 {
-  /* TODO cache it */
-#if 0
   ngx_http_core_loc_conf_t *clcf;
-  SgObject context;
+  nginx_context_node_t     *node;
+  uint32_t                  hash;
+
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
-  /* get from hashtable */
-  &clcf->name;
+  hash = ngx_crc32_long(clcf->name.data, clcf->name.len);
+  node = (nginx_context_node_t *)
+    ngx_str_rbtree_lookup(&nginx_contexts, &clcf->name, hash);
+  
+  if (!node) {
+    /* this should never happend but in case of something overlooked */
+    ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+		  "'sagittarius': Unknown context node");
+    /* we create fresh ones */
+    return make_nginx_context(r);
+  }
+  /* okay it's already inserted :) */
+  if (!SG_FALSEP(node->context)) return node->context;
+
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		"'sagittarius': Creating a context of %V", &clcf->name);
   if (ngx_thread_mutex_lock(&global_lock, r->connection->log) != NGX_OK) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Failed to lock the mutex");
     return SG_UNDEF;
   }
   
-  context = make_nginx_context(r);
-
+  node->context = make_nginx_context(r);
+  
   if (ngx_thread_mutex_unlock(&global_lock, r->connection->log) != NGX_OK) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Failed to unlock the mutex");
     return SG_UNDEF;
   }
   
-  return context;
-#endif
-  return make_nginx_context(r);
+  return node->context;
 }
 
 
@@ -1606,9 +1628,7 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     }
     return NGX_DONE;
   }
-  rc = sagittarius_call(r);
-  ngx_http_finalize_request(r, rc);
-  return rc;
+  return sagittarius_call(r);
 }
 
 static ngx_int_t init_base_library(ngx_log_t *log)
