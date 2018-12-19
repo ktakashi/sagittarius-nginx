@@ -15,7 +15,7 @@
 */
 /* 
 The configuration looks like this
-sagittarius $entry-point {
+sagittarius $entry-point [$init] [$cleanup] {
   load_path foo/bar /baz/; # up to n path (haven't decided the number...)
   library "(your web library)";
   parameter var0 value0;
@@ -96,6 +96,9 @@ typedef struct
   /* application context path. i.e. location path */
   SgObject path;
   SgObject parameters;		/* parameters */
+  /* internal use only */
+  SgObject library;		/* context library */
+  SgObject cleanup;		/* cleanup procedure if exists */
 } SgNginxContext;
 SG_CLASS_DECL(Sg_NginxContextClass)
 #define SG_CLASS_NGINX_CONTEXT (&Sg_NginxContextClass)
@@ -1237,12 +1240,6 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   return NGX_OK;
 }
 
-static void ngx_http_sagittarius_exit_process(ngx_cycle_t *cycle)
-{
-   ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0, "'sagittarius': Cleaning up");
-  /* call cleanup procedures... how? */
-}
-
 static ngx_rbtree_t       nginx_contexts;
 static ngx_rbtree_node_t  sentinel;
 typedef struct
@@ -1250,6 +1247,39 @@ typedef struct
   ngx_str_node_t sn;
   SgObject       context;
 } nginx_context_node_t;
+
+static void call_cleanup(ngx_cycle_t *cycle, ngx_rbtree_node_t *node)
+{
+  nginx_context_node_t *cn;
+  if (node != nginx_contexts.sentinel) {
+    cn = (nginx_context_node_t *)node;
+    if (!SG_FALSEP(cn->context) &&
+	!SG_FALSEP(SG_NGINX_CONTEXT(cn->context)->cleanup)) {
+      ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
+		    "'sagittarius': Cleaning up context '%V'", &cn->sn.str);
+      SG_UNWIND_PROTECT {
+	Sg_Apply1(SG_NGINX_CONTEXT(cn->context)->cleanup, cn->context);
+      } SG_WHEN_ERROR {
+	ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
+		      "'sagittarius': Failed to call cleanup procedure");
+      } SG_END_PROTECT;
+    } else {
+      ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
+		    "'sagittarius': Skip cleaning up context '%V'",
+		    &cn->sn.str);
+    }
+    call_cleanup(cycle, node->left);
+    call_cleanup(cycle, node->right);
+  }
+}
+
+static void ngx_http_sagittarius_exit_process(ngx_cycle_t *cycle)
+{
+  /* go through the rbtree */
+  /* http://nginx.org/en/docs/dev/development_guide.html#red_black_tree */
+  ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0, "'sagittarius': Cleaning up");
+  call_cleanup(cycle, nginx_contexts.root);
+}
 
 static ngx_int_t ngx_http_sagittarius_preconfiguration(ngx_conf_t *cf)
 {
@@ -1443,6 +1473,7 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
   sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   c->path = ngx_str_to_string(&clcf->name);
+  c->cleanup = SG_FALSE;
   params = sg_conf->parameters;
   if (params) {
     c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, params->nelts);
@@ -1456,6 +1487,39 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
     }
   } else {
     c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, 0);
+  }
+  c->library = 
+    Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&sg_conf->library)), FALSE);
+  if (!SG_FALSEP(c->library)) {
+    SgObject p;
+    if (sg_conf->cleanup_proc.len != 0) {
+      p = Sg_FindBinding(SG_LIBRARY(c->library),
+			 Sg_Intern(ngx_str_to_string(&sg_conf->cleanup_proc)),
+			 SG_UNBOUND);
+      if (!SG_UNBOUNDP(p)) {
+	c->cleanup = SG_GLOC_GET(SG_GLOC(p));
+      }
+    }
+    if (sg_conf->init_proc.len != 0) {
+      p = Sg_FindBinding(SG_LIBRARY(c->library),
+			 Sg_Intern(ngx_str_to_string(&sg_conf->init_proc)),
+			 SG_UNBOUND);
+      if (SG_UNBOUNDP(p)) {
+	ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+		      "'sagittarius': Init procedure '%V' not found",
+		      &sg_conf->init_proc);
+      } else {
+	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		      "'sagittarius': calling init procedure '%V'",
+		      &sg_conf->init_proc);
+	SG_UNWIND_PROTECT {
+	  Sg_Apply1(SG_GLOC_GET(SG_GLOC(p)), c);
+	} SG_WHEN_ERROR {
+	  ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+			"'sagittarius': Failed to call init procedure");
+	} SG_END_PROTECT;
+      }
+    }
   }
   /* mark as immutable for Scheme world*/
   SG_HASHTABLE(c->parameters)->immutablep = TRUE;
@@ -1494,31 +1558,6 @@ static SgObject get_context(ngx_http_request_t *r)
   }
   
   node->context = make_nginx_context(r);
-
-  if (sg_conf->init_proc.len != 0) {
-    SgObject l, proc;
-    l = Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&sg_conf->library)), FALSE);
-    if (!SG_FALSEP(l)) {
-      proc = Sg_FindBinding(SG_LIBRARY(l),
-			    Sg_Intern(ngx_str_to_string(&sg_conf->init_proc)),
-			    SG_UNBOUND);
-      if (SG_UNBOUNDP(proc)) {
-	ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
-		      "'sagittarius': Init procedure '%V' not found",
-		      &sg_conf->init_proc);
-      } else {
-	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		      "'sagittarius': calling init procedure '%V'",
-		      &sg_conf->init_proc);
-	SG_UNWIND_PROTECT {
-	  Sg_Apply1(SG_GLOC_GET(SG_GLOC(proc)), node->context);
-	} SG_WHEN_ERROR {
-	  ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-			"'sagittarius': Failed to call init procedure");
-	} SG_END_PROTECT;
-      }
-    }
-  }
 
   if (ngx_thread_mutex_unlock(&global_lock, r->connection->log) != NGX_OK) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
