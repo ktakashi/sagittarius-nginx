@@ -30,6 +30,8 @@ typedef struct {
   ngx_array_t *load_paths;	/* array of ngx_str_t */
   ngx_str_t library;		/* webapp library */
   ngx_str_t procedure;		/* entry point */
+  ngx_str_t init_proc;		/* initialisation */
+  ngx_str_t cleanup_proc;	/* clean up (how?) */
   /* context parameters, this is a temporary storage */
   ngx_array_t *parameters;	/* array of ngx_table_elt_t */
 } ngx_http_sagittarius_conf_t;
@@ -46,11 +48,12 @@ static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
 						 void *p, void *c);
 
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle);
+static void      ngx_http_sagittarius_exit_process(ngx_cycle_t *cycle);
 
 static ngx_command_t ngx_http_sagittarius_commands[] = {
   {
     ngx_string("sagittarius"),
-    NGX_HTTP_LOC_CONF | NGX_CONF_BLOCK | NGX_CONF_TAKE1,
+    NGX_HTTP_LOC_CONF | NGX_CONF_BLOCK | NGX_CONF_TAKE123,
     ngx_http_sagittarius_block,
     NGX_HTTP_LOC_CONF_OFFSET,
     0,
@@ -79,7 +82,7 @@ ngx_module_t ngx_http_sagittarius_module = {
   ngx_http_sagittarius_init_process, /* init process */
   NULL,				/* init thread */
   NULL,				/* exit thread */
-  NULL,				/* exit process */
+  ngx_http_sagittarius_exit_process, /* exit process */
   NULL,				/* exit master */
   NGX_MODULE_V1_PADDING
 };
@@ -1234,6 +1237,12 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   return NGX_OK;
 }
 
+static void ngx_http_sagittarius_exit_process(ngx_cycle_t *cycle)
+{
+   ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0, "'sagittarius': Cleaning up");
+  /* call cleanup procedures... how? */
+}
+
 static ngx_rbtree_t       nginx_contexts;
 static ngx_rbtree_node_t  sentinel;
 typedef struct
@@ -1288,6 +1297,12 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
   value = cf->args->elts;
   sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   sg_conf->procedure = (ngx_str_t)value[1];
+  if (cf->args->nelts > 2) {
+    sg_conf->init_proc = (ngx_str_t)value[2];
+  }
+  if (cf->args->nelts > 3) {
+    sg_conf->cleanup_proc = (ngx_str_t)value[3];
+  }
   ngx_log_error(NGX_LOG_DEBUG, cf->log, 0,
 		"'sagittarius' invocation procedure name %V",
 		&sg_conf->procedure);
@@ -1403,6 +1418,8 @@ static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf)
   conf->library = nstr;
   conf->procedure = nstr;
   conf->load_paths = NULL;
+  conf->init_proc = nstr;
+  conf->cleanup_proc = nstr;
   conf->parameters = NULL;
   return conf;
 }
@@ -1450,8 +1467,10 @@ static SgObject get_context(ngx_http_request_t *r)
   ngx_http_core_loc_conf_t *clcf;
   nginx_context_node_t     *node;
   uint32_t                  hash;
+  ngx_http_sagittarius_conf_t *sg_conf;
 
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+  sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   hash = ngx_crc32_long(clcf->name.data, clcf->name.len);
   node = (nginx_context_node_t *)
     ngx_str_rbtree_lookup(&nginx_contexts, &clcf->name, hash);
@@ -1475,7 +1494,32 @@ static SgObject get_context(ngx_http_request_t *r)
   }
   
   node->context = make_nginx_context(r);
-  
+
+  if (sg_conf->init_proc.len != 0) {
+    SgObject l, proc;
+    l = Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&sg_conf->library)), FALSE);
+    if (!SG_FALSEP(l)) {
+      proc = Sg_FindBinding(SG_LIBRARY(l),
+			    Sg_Intern(ngx_str_to_string(&sg_conf->init_proc)),
+			    SG_UNBOUND);
+      if (SG_UNBOUNDP(proc)) {
+	ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+		      "'sagittarius': Init procedure '%V' not found",
+		      &sg_conf->init_proc);
+      } else {
+	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		      "'sagittarius': calling init procedure '%V'",
+		      &sg_conf->init_proc);
+	SG_UNWIND_PROTECT {
+	  Sg_Apply1(SG_GLOC_GET(SG_GLOC(proc)), node->context);
+	} SG_WHEN_ERROR {
+	  ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+			"'sagittarius': Failed to call init procedure");
+	} SG_END_PROTECT;
+      }
+    }
+  }
+
   if (ngx_thread_mutex_unlock(&global_lock, r->connection->log) != NGX_OK) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Failed to unlock the mutex");
@@ -1552,6 +1596,7 @@ static ngx_int_t sagittarius_call(ngx_http_request_t *r)
   
   req = make_nginx_request(r);
   resp = make_nginx_response(r);
+
   SG_UNWIND_PROTECT {
     status = Sg_Apply3(nginx_dispatch, proc, req, resp);
   } SG_WHEN_ERROR {
