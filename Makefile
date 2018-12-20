@@ -42,11 +42,13 @@ uninstall:
 	$(RM) $(DESTDIR)$(SAGITTARIUS_SITELIB)/sagittarius/nginx.scm
 
 run:
+	./scripts/redis.sh start
 	$(MAKE) -C build run NGINX_VERSION=$(NGINX_VERSION)\
 	  SAGITTARIUS_CONFIG=$(SAGITTARIUS_CONFIG)
 
 stop:
 	$(MAKE) -C build stop
+	./scripts/redis.sh stop
 
 valgrind:
 	$(MAKE) -C build valgrind NGINX_VERSION=$(NGINX_VERSION)\
