@@ -11,13 +11,20 @@
 	    (rfc cookie)
 	    (sagittarius nginx))
 (define *redis-connection* (make-parameter #f))
+(define *session-period* (make-parameter #f))
+(define *session-duration* (make-parameter #f))
     
 (define (init context)
   (*redis-connection*
    (redis-connection-open! 
     (make-redis-connection
      (nginx-context-parameter-ref context "redis-host")
-     (nginx-context-parameter-ref context "redis-port")))))
+     (nginx-context-parameter-ref context "redis-port"))))
+  (let ((period
+	 (string->number
+	  (nginx-context-parameter-ref context "session-expires"))))
+    (*session-period* period)
+    (*session-duration* (make-time 'time-duration 0 period))))
 
 (define (clean context)
   (redis-connection-close! (*redis-connection*)))
@@ -38,9 +45,12 @@
 	     last
 	     (loop (cdr e*) (eval (car e*) env))))))
   (let* ((history (redis-get (*redis-connection*) (cookie-name session)))
-	 (env (environment '(rnrs)))
+	 (env (environment '(rnrs)
+			   '(only (sagittarius) import library define-library)))
 	 (last-result (cond ((and history (eval-history history env)))
 			    (else #f))))
+    ;; update session ttl
+    (redis-expire (*redis-connection*) (cookie-name session) (*session-period*))
     (case (string->symbol (nginx-request-method request))
       ((POST)
        (let ((in (transcoded-port (nginx-request-input-port request)
@@ -55,20 +65,22 @@
       (else (display last-result out) (newline out)))
     (values 200 'text/plain)))
 
-(define period (make-time 'time-duration 0 900))
 (define (get-session request response)
   (define (session-id=? name cookie) (string=? name (cookie-name cookie)))
-  (cond ((member "SESSION-ID" (nginx-request-cookies request) session-id=?)
-	 => car)
+  (define (check-ttl-if-exists session-id cookies)
+    (cond ((member session-id cookies session-id=?) =>
+	   (lambda (c)
+	     (and (> (redis-ttl (*redis-connection*) (cookie-name (car c))) 0)
+		  (car c))))
+	  (else #f)))
+  (cond ((check-ttl-if-exists "SESSION-ID" (nginx-request-cookies request)))
 	(else
-	 (let* ((time (add-duration (current-time) period))
+	 (let* ((time (add-duration (current-time) (*session-duration*)))
 		(path (nginx-context-path (nginx-request-context request)))
 		(cookie (make-cookie "SESSION-ID" (uuid->string (make-v4-uuid))
 				     :path path
 				     :expires (time-utc->date time))))
 	   (nginx-response-header-add! response
-	    "Set-Cookie" (cookie->string cookie))
+				       "Set-Cookie" (cookie->string cookie))
 	   cookie))))
-	 
-
 )
