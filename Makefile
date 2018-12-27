@@ -12,7 +12,7 @@ SAGITTARIUS_SITELIB=$(SAGITTARIUS_PREFIX)/$(SAGITTARIUS_PKGDIR)
 # docker info
 SAGITTARIUS_VERSION=0.9.5
 NGINX_VERSION=1.15.5
-VERSION=0.0.1
+VERSION=1.0.0
 
 all: 
 	$(MAKE) -C build NGINX_VERSION=$(NGINX_VERSION)\
@@ -21,8 +21,8 @@ all:
 docker:
 	docker build \
 	-t sagittarius/nginx:$(VERSION) \
+	-t sagittarius/nginx:latest \
 	--build-arg sagittarius_version=$(SAGITTARIUS_VERSION) \
-	--build-arg host_nginx_version=$(NGINX_VERSION) \
 	.
 
 clean:

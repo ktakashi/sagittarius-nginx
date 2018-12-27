@@ -17,14 +17,20 @@ ADD scheme /home/sagittarius/src
 RUN cd /home/sagittarius && chmod +x ./install.sh
 RUN cd /home/sagittarius && ./install.sh src
 
-ARG host_nginx_version
+# build NGINX module for sagittarius
 RUN mkdir /home/sagittarius/nginx
 ADD build/Makefile /home/sagittarius/nginx/Makefile
 ADD src /home/sagittarius/nginx/src
 RUN apt-get install -y libpcre3-dev
+# get NGINX version of this docker
+RUN nginx -v 2>&1 | sed -e 's|nginx version: nginx/||' > /home/sagittarius/nginx/version
+RUN cat /home/sagittarius/nginx/version
 RUN cd /home/sagittarius/nginx && \
-	make NGINX_VERSION=$host_nginx_version MODULE_LOCATION=../src
-RUN cp /home/sagittarius/nginx/nginx-$host_nginx_version/objs/ngx_http_sagittarius_module.so \
+	make NGINX_VERSION=`cat /home/sagittarius/nginx/version` \
+	MODULE_LOCATION=../src
+RUN cp /home/sagittarius/nginx/nginx-`cat /home/sagittarius/nginx/version`/objs/ngx_http_sagittarius_module.so \
 	/usr/lib/nginx/modules/ngx_http_sagittarius_module.so
+# make some required directories
+RUN mkdir -p /etc/nginx/logs
 
-CMD ["/usr/local/bin/sash", "-i"]
+CMD ["nginx", "-g", "daemon off;"]
