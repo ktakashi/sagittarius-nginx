@@ -1531,10 +1531,8 @@ static SgObject get_context(ngx_http_request_t *r)
   ngx_http_core_loc_conf_t *clcf;
   nginx_context_node_t     *node;
   uint32_t                  hash;
-  ngx_http_sagittarius_conf_t *sg_conf;
 
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
-  sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   hash = ngx_crc32_long(clcf->name.data, clcf->name.len);
   node = (nginx_context_node_t *)
     ngx_str_rbtree_lookup(&nginx_contexts, &clcf->name, hash);

@@ -1,10 +1,9 @@
 SAGITTARIUS_CONFIG ?= sagittarius-config
 NGINX_VERSION      ?= 1.15.5
+MODULE_LOCATION    ?= ../../src
 
 INC_PATH=$(shell $(SAGITTARIUS_CONFIG) -I)
-
 OPTS=-Wno-missing-field-initializers $(INC_PATH)
-MODULE_LOCATION=../../src
 SANDBOX=nginx-$(NGINX_VERSION)/sandbox
 
 ifeq ($(shell uname), Darwin)

@@ -18,7 +18,13 @@ RUN cd /home/sagittarius && chmod +x ./install.sh
 RUN cd /home/sagittarius && ./install.sh src
 
 ARG host_nginx_version
-ADD build/nginx-$host_nginx_version/objs/ngx_http_sagittarius_module.so \
+RUN mkdir /home/sagittarius/nginx
+ADD build/Makefile /home/sagittarius/nginx/Makefile
+ADD src /home/sagittarius/nginx/src
+RUN apt-get install -y libpcre3-dev
+RUN cd /home/sagittarius/nginx && \
+	make NGINX_VERSION=$host_nginx_version MODULE_LOCATION=../src
+RUN cp /home/sagittarius/nginx/nginx-$host_nginx_version/objs/ngx_http_sagittarius_module.so \
 	/usr/lib/nginx/modules/ngx_http_sagittarius_module.so
 
 CMD ["/usr/local/bin/sash", "-i"]
