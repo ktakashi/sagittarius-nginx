@@ -1,5 +1,5 @@
 SAGITTARIUS_CONFIG ?= sagittarius-config
-NGINX_VERSION      ?= 1.15.5
+NGINX_VERSION      ?= 1.15.8
 MODULE_LOCATION    ?= ../../src
 
 INC_PATH=$(shell $(SAGITTARIUS_CONFIG) -I)
