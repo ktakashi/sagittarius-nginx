@@ -3,7 +3,8 @@
 
 #!nounbound
 (library (sagittarius nginx)
-    (export nginx-request-method
+    (export nginx-request?
+	    nginx-request-method
 	    nginx-request-uri
 	    nginx-request-host
 	    nginx-request-connection
@@ -37,6 +38,7 @@
 	    nginx-request-input-port
 	    nginx-request-context
 
+	    nginx-response?
 	    nginx-response-output-port
 	    nginx-response-headers
 	    nginx-response-header-add!
@@ -63,9 +65,8 @@
     (guard (e (else '())) (parse-cookies-string str)))
   (nginx-request-cookies-set! request
     (append-map safe-parse-cookies-string (nginx-request-cookies request)))
-  (let-values (((status content-type . headers) (procedure request response)))
+  (let-values (((status content-type) (procedure request response)))
     (cond  ((->contnet-type-string content-type) =>
 	    (lambda (ctype) (nginx-response-content-type-set! response ctype))))
-    ;; add content type and headers here
     status))
 )

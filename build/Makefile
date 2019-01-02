@@ -58,7 +58,7 @@ prep: nginx
 	mkdir -p $(SANDBOX)/logs $(SANDBOX)/modules
 	cp nginx-$(NGINX_VERSION)/objs/ngx_http_sagittarius_module.so \
 	   $(SANDBOX)/modules/
-	cp -r ../scheme/sagittarius $(SANDBOX)/lib
+	cp -r ../scheme/ $(SANDBOX)/lib
 
 stop:
 	./nginx-$(NGINX_VERSION)/objs/nginx -s stop \
