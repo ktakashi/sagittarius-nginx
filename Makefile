@@ -20,11 +20,14 @@ all:
 
 docker:
 	docker build \
-	-t sagittarius/nginx:$(VERSION) \
-	-t sagittarius/nginx:latest \
+	-t sagittariusscheme/nginx:$(VERSION) \
+	-t sagittariusscheme/nginx:latest \
 	--build-arg sagittarius_version=$(SAGITTARIUS_VERSION) \
 	.
 
+push:
+	docker push sagittariusscheme/nginx:$(VERSION)
+	docker push sagittariusscheme/nginx:latest
 clean:
 	$(MAKE) -C build NGINX_VERSION=$(NGINX_VERSION) \
 	  SAGITTARIUS_CONFIG=$(SAGITTARIUS_CONFIG) clean
