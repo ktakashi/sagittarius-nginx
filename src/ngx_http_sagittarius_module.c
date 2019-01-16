@@ -1748,11 +1748,13 @@ static SgObject setup_load_path(volatile SgVM *vm,
   ngx_uint_t i;
   ngx_str_t *value = sg_conf->load_paths->elts;
 
-  for (i = 0; i < sg_conf->load_paths->nelts; i++) {
-    ngx_str_t *s = &value[i];
-    ngx_log_error(NGX_LOG_DEBUG, log, 0, "'sagittarius': load path: %V", s);
-    /* we prepend the load path */
-    Sg_AddLoadPath(ngx_str_to_string(s), FALSE);
+  if (sg_conf->load_paths) {
+    for (i = 0; i < sg_conf->load_paths->nelts; i++) {
+      ngx_str_t *s = &value[i];
+      ngx_log_error(NGX_LOG_DEBUG, log, 0, "'sagittarius': load path: %V", s);
+      /* we prepend the load path */
+      Sg_AddLoadPath(ngx_str_to_string(s), FALSE);
+    }
   }
 
   return saved_loadpath;

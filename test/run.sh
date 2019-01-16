@@ -63,6 +63,7 @@ check_content() {
 	fi
     fi
     echo not ok
+    cat $tempfile
     return -1
 }
 
@@ -103,6 +104,12 @@ curl -si http://localhost:8080/cookie -H "Cookie: key0=value0; key1=value1;" \
 check_content 'key0=value0'
 check_content 'key1=value1'
 check_content 'key2=value2'
+
+echo
+echo "Test no lib"
+curl -si http://localhost:8080/no-lib > $tempfile
+# we don't setup html content so it's 404...
+check_status '404'
 
 # echo $tempfile
 rm $tempfile
