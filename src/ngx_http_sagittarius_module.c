@@ -1746,9 +1746,10 @@ static SgObject setup_load_path(volatile SgVM *vm,
 {
   SgObject saved_loadpath = vm->loadPath;
   ngx_uint_t i;
-  ngx_str_t *value = sg_conf->load_paths->elts;
-
+  ngx_str_t *value;
+  
   if (sg_conf->load_paths) {
+    value = sg_conf->load_paths->elts;
     for (i = 0; i < sg_conf->load_paths->nelts; i++) {
       ngx_str_t *s = &value[i];
       ngx_log_error(NGX_LOG_DEBUG, log, 0, "'sagittarius': load path: %V", s);
