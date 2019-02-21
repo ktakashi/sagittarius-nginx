@@ -20,13 +20,16 @@ sagittarius $entry-point [$init] [$cleanup] {
   library "(your web library)";
   parameter var0 value0;
   parameter var1 varlu1;
+  filter "do-filter" 0 "(your filter library)";
+  filter "do-filter" 1; # if the library is the same as the web app library
 }
 
 We do not use SgObject here. I'm not sure when the configuration parsing 
 happens and the initialisation of Sagittarius happens on the creation of
 worker process.
  */
-typedef struct {
+typedef struct
+{
   ngx_array_t *load_paths;	/* array of ngx_str_t */
   ngx_str_t library;		/* webapp library */
   ngx_str_t procedure;		/* entry point */
@@ -34,7 +37,16 @@ typedef struct {
   ngx_str_t cleanup_proc;	/* clean up (how?) */
   /* context parameters, this is a temporary storage */
   ngx_array_t *parameters;	/* array of ngx_table_elt_t */
+  ngx_array_t *filters;		/* array of sagittarius_filter_t */
 } ngx_http_sagittarius_conf_t;
+
+typedef struct
+{
+  ngx_str_t procedure;
+  int order;
+  int has_library;
+  ngx_str_t library;
+} sagittarius_filter_t;
 
 static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 					ngx_command_t *cmd,
@@ -99,6 +111,7 @@ typedef struct
   /* internal use only */
   SgObject library;		/* context library */
   SgObject cleanup;		/* cleanup procedure if exists */
+  SgObject procedure;		/* entry point */
 } SgNginxContext;
 SG_CLASS_DECL(Sg_NginxContextClass)
 #define SG_CLASS_NGINX_CONTEXT (&Sg_NginxContextClass)
@@ -1367,7 +1380,18 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
   
   sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   value = cf->args->elts;
-
+#define allocate_array(to, init, st)					\
+  do {									\
+    if (!sg_conf-> to ) {						\
+      sg_conf-> to = ngx_array_create(cf->pool, (init), sizeof(st));	\
+      if (!sg_conf-> to ) {						\
+	ngx_log_error(NGX_LOG_ERR, cf->log, 0,				\
+		      "'sagittarius': Failed to allocate an array");	\
+	return NGX_CONF_ERROR;						\
+      }									\
+    }									\
+  } while (0)
+  
   if (ngx_strcmp(value[0].data, "load_path") == 0) {
     if (cf->args->nelts < 2) {
       ngx_log_error(NGX_LOG_ERR, cf->log, 0,
@@ -1375,14 +1399,7 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 		    "'load_path' must take at least one argument");
       return NGX_CONF_ERROR;
     }
-    if (!sg_conf->load_paths) {
-      sg_conf->load_paths = ngx_array_create(cf->pool, 0, sizeof(ngx_str_t));
-      if (!sg_conf->load_paths) {
-	ngx_log_error(NGX_LOG_ERR, cf->log, 0,
-		      "'sagittarius': Failed to allocate load path array");
-	return NGX_CONF_ERROR;
-      }
-    }
+    allocate_array(load_paths, 0, ngx_str_t);
     prefix = &cf->cycle->prefix;
     elts = ngx_array_push_n(sg_conf->load_paths, cf->args->nelts-1);
 
@@ -1407,20 +1424,12 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     sg_conf->library = value[1];
   } else if (ngx_strcmp(value[0].data, "parameter") == 0) {
     ngx_keyval_t *e;
-    if (!sg_conf->parameters) {
-      /* 
-	 allocate at least one here since we don't use ngx_array_push_n.
-	 I think it's a bug of NGINX ngx_array_push since it doesn't handle
-	 zero initial array properly...
-       */
-      sg_conf->parameters
-	= ngx_array_create(cf->pool, 1, sizeof(ngx_keyval_t));
-      if (!sg_conf->parameters) {
-	ngx_log_error(NGX_LOG_ERR, cf->log, 0,
-		      "'sagittarius': Failed to allocate parameter array");
-	return NGX_CONF_ERROR;
-      }
-    }
+    /* 
+       allocate at least one here since we don't use ngx_array_push_n.
+       I think it's a bug of NGINX ngx_array_push since it doesn't handle
+       zero initial array properly...
+    */
+    allocate_array(parameters, 1, ngx_keyval_t);
     if (cf->args->nelts != 3) {
       ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		    "'sagittarius': 'parameter' must contain "
@@ -1430,6 +1439,24 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     e = ngx_array_push(sg_conf->parameters);
     e->key = value[1];
     e->value = value[2];
+  } else if (ngx_strcmp(value[0].data, "filter") == 0) {
+    sagittarius_filter_t *e;
+    allocate_array(filters, 1, sagittarius_filter_t);
+    if (cf->args->nelts < 3) {
+      ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		    "'sagittarius': 'filter' must contain at least"
+		    "2 elements (entry_point and order)");
+      return NGX_CONF_ERROR;
+    }
+    e = ngx_array_push(sg_conf->filters);
+    e->procedure = value[1];
+    e->order = ngx_atoi(value[2].data, value[2].len);
+    if (cf->args->nelts == 4) {
+      e->has_library = TRUE;
+      e->library = value[3];
+    } else {
+      e->has_library = FALSE;
+    }
   } else {
     ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		  "'sagittarius': unknown directive %V", &value[0]);
@@ -1451,6 +1478,7 @@ static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf)
   conf->init_proc = nstr;
   conf->cleanup_proc = nstr;
   conf->parameters = NULL;
+  conf->filters = NULL;
   return conf;
 }
 
@@ -1458,6 +1486,27 @@ static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
 						 void *p, void *c)
 {
   return NGX_CONF_OK;
+}
+
+static SgObject get_filter_applied_procedure(SgObject library,
+					     ngx_log_t *log,
+					     ngx_http_sagittarius_conf_t *sg_conf)
+{
+  SgObject proc;
+  proc = Sg_FindBinding(SG_LIBRARY(library),
+			Sg_Intern(ngx_str_to_string(&sg_conf->procedure)),
+			SG_UNBOUND);
+  if (SG_UNBOUNDP(proc)) {
+    ngx_log_error(NGX_LOG_ERR, log, 0,
+		  "'sagittarius': Web application procedure '%V' not found.",
+		  &sg_conf->procedure);
+    return SG_FALSE;
+  }
+  proc = SG_GLOC_GET(SG_GLOC(proc));
+  if (!sg_conf->filters) return proc;
+  /* filter will take request, response and next, like JEE filter */
+  
+  return proc;
 }
 
 static SgObject make_nginx_context(ngx_http_request_t *r)
@@ -1474,6 +1523,7 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
   sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
   c->path = ngx_str_to_string(&clcf->name);
   c->cleanup = SG_FALSE;
+  c->procedure = SG_FALSE;
   params = sg_conf->parameters;
   if (params) {
     c->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING, params->nelts);
@@ -1520,6 +1570,14 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
 	} SG_END_PROTECT;
       }
     }
+    c->procedure = get_filter_applied_procedure(c->library,
+						r->connection->log,
+						sg_conf);
+  } else {
+    /* log it */
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "'sagittarius': Web application library '%V' not found.",
+		  &sg_conf->library);
   }
   /* mark as immutable for Scheme world*/
   SG_HASHTABLE(c->parameters)->immutablep = TRUE;
@@ -1567,7 +1625,7 @@ static SgObject get_context(ngx_http_request_t *r)
 }
 
 
-static SgObject make_nginx_request(ngx_http_request_t *req)
+static SgObject make_nginx_request(ngx_http_request_t *req, SgObject context)
 {
   SgNginxRequest *ngxReq = SG_NEW(SgNginxRequest);
   SG_SET_CLASS(ngxReq, SG_CLASS_NGINX_REQUEST);
@@ -1582,7 +1640,7 @@ static SgObject make_nginx_request(ngx_http_request_t *req)
   ngxReq->schema = SG_FALSE; /* initialise lazily */
   ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
-  ngxReq->context = get_context(req);
+  ngxReq->context = context;
   return SG_OBJ(ngxReq);
 }
 
@@ -1603,13 +1661,11 @@ static ngx_int_t init_base_library(ngx_log_t *log);
 static SgObject setup_load_path(volatile SgVM *vm,
 				ngx_log_t *log,
 				ngx_http_sagittarius_conf_t *sg_conf);
-static SgObject retrieve_procedure(ngx_log_t *log,
-				   ngx_http_sagittarius_conf_t *sg_conf);
 static off_t compute_content_length(ngx_chain_t *out);
 
 static ngx_int_t sagittarius_call(ngx_http_request_t *r)
 {
-  SgObject req, resp, saved_loadpath, proc;
+  SgObject req, resp, saved_loadpath, proc, context;
   volatile SgVM *vm;
   volatile SgObject status;
   ngx_int_t rc;
@@ -1625,13 +1681,13 @@ static ngx_int_t sagittarius_call(ngx_http_request_t *r)
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
   }
-  
-  proc = retrieve_procedure(r->connection->log, sg_conf);
+  context = get_context(r);
+  proc = SG_NGINX_CONTEXT(context)->procedure;
   if (!SG_PROCEDUREP(proc)) {
     return NGX_HTTP_NOT_FOUND;
   }
   
-  req = make_nginx_request(r);
+  req = make_nginx_request(r, context);
   resp = make_nginx_response(r);
 
   SG_UNWIND_PROTECT {
@@ -1759,29 +1815,6 @@ static SgObject setup_load_path(volatile SgVM *vm,
   }
 
   return saved_loadpath;
-}
-
-static SgObject retrieve_procedure(ngx_log_t *log,
-				   ngx_http_sagittarius_conf_t *sg_conf)
-{
-  SgObject lib, proc;
-  lib = Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&sg_conf->library)), FALSE);
-  if (SG_FALSEP(lib)) {
-    ngx_log_error(NGX_LOG_ERR, log, 0,
-		  "'sagittarius': Web application library '%V' not found.",
-		  &sg_conf->library);
-    return SG_FALSE;
-  }
-  proc = Sg_FindBinding(SG_LIBRARY(lib),
-			Sg_Intern(ngx_str_to_string(&sg_conf->procedure)),
-			SG_UNBOUND);
-  if (SG_UNBOUNDP(proc)) {
-    ngx_log_error(NGX_LOG_ERR, log, 0,
-		  "'sagittarius': Web application procedure '%V' not found.",
-		  &sg_conf->procedure);
-    return SG_FALSE;
-  }
-  return SG_GLOC_GET(SG_GLOC(proc));
 }
 
 static off_t compute_content_length(ngx_chain_t *out)
