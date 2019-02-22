@@ -1488,25 +1488,84 @@ static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
   return NGX_CONF_OK;
 }
 
+#define retrieve_procedure(r, lib, log, str)				\
+  do {									\
+    SgObject t__ = Sg_FindBinding(SG_LIBRARY(lib),			\
+				  Sg_Intern(ngx_str_to_string(str)),	\
+				  SG_UNBOUND);				\
+    if (SG_UNBOUNDP(t__)) {						\
+      ngx_log_error(NGX_LOG_WARN, (log), 0,				\
+		    "'sagittarius': Procedure '%V' not found",		\
+		    (str));						\
+      (r) = t__;							\
+    } else {								\
+      (r) = SG_GLOC_GET(SG_GLOC(t__));					\
+    }									\
+  } while (0)
+
+static int filter_compare(const void *a, const void *b)
+{
+  sagittarius_filter_t *fa, *fb;
+  fa = (sagittarius_filter_t *)a;
+  fb = (sagittarius_filter_t *)b;
+
+  return fb->order - fa->order;
+}
+
+static SgObject filter_caller(SgObject *args, int argc, void *data)
+{
+  SgObject filter = SG_CAR(SG_OBJ(data));
+  SgObject next = SG_CDR(SG_OBJ(data));
+  return Sg_VMApply3(filter, args[0], args[1], next);
+}
+
+static SgObject combine_filter(SgObject filter, SgObject next)
+{
+  /* 
+     (lambda (request response) (filter request response next))
+   */
+  return Sg_MakeSubr(filter_caller, Sg_Cons(filter, next), 2, 0,
+		     SG_MAKE_STRING("filter-chain"));
+}
+
 static SgObject get_filter_applied_procedure(SgObject library,
 					     ngx_log_t *log,
 					     ngx_http_sagittarius_conf_t *sg_conf)
 {
-  SgObject proc;
-  proc = Sg_FindBinding(SG_LIBRARY(library),
-			Sg_Intern(ngx_str_to_string(&sg_conf->procedure)),
-			SG_UNBOUND);
+  SgObject proc, next;
+  ngx_uint_t i;
+  sagittarius_filter_t *values;
+  
+  retrieve_procedure(proc, library, log, &sg_conf->procedure);
   if (SG_UNBOUNDP(proc)) {
     ngx_log_error(NGX_LOG_ERR, log, 0,
 		  "'sagittarius': Web application procedure '%V' not found.",
 		  &sg_conf->procedure);
     return SG_FALSE;
   }
-  proc = SG_GLOC_GET(SG_GLOC(proc));
+
   if (!sg_conf->filters) return proc;
-  /* filter will take request, response and next, like JEE filter */
+  ngx_qsort(sg_conf->filters->elts, sg_conf->filters->nelts,
+	    sg_conf->filters->size, filter_compare);
+  values = sg_conf->filters->elts;
+  next = proc;
+  for (i = 0; i < sg_conf->filters->nelts; i++) {
+    sagittarius_filter_t *f = &values[i];
+    SgObject lib = library, filter;
+    if (f->has_library) {
+      lib = Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&f->library)), FALSE);
+      if (SG_FALSEP(lib)) {
+	ngx_log_error(NGX_LOG_ERR, log, 0,
+		      "'sagittarius': Web filter library %V not found.",
+		      &f->library);
+	continue;
+      }
+    }
+    retrieve_procedure(filter, lib, log, &f->procedure);
+    next = combine_filter(filter, next);
+  }
   
-  return proc;
+  return next;
 }
 
 static SgObject make_nginx_context(ngx_http_request_t *r)
@@ -1541,24 +1600,15 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
   c->library = 
     Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&sg_conf->library)), FALSE);
   if (!SG_FALSEP(c->library)) {
-    SgObject p;
     if (sg_conf->cleanup_proc.len != 0) {
-      p = Sg_FindBinding(SG_LIBRARY(c->library),
-			 Sg_Intern(ngx_str_to_string(&sg_conf->cleanup_proc)),
-			 SG_UNBOUND);
-      if (!SG_UNBOUNDP(p)) {
-	c->cleanup = SG_GLOC_GET(SG_GLOC(p));
-      }
+      retrieve_procedure(c->cleanup, c->library, r->connection->log,
+			 &sg_conf->cleanup_proc);
     }
     if (sg_conf->init_proc.len != 0) {
-      p = Sg_FindBinding(SG_LIBRARY(c->library),
-			 Sg_Intern(ngx_str_to_string(&sg_conf->init_proc)),
-			 SG_UNBOUND);
-      if (SG_UNBOUNDP(p)) {
-	ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
-		      "'sagittarius': Init procedure '%V' not found",
-		      &sg_conf->init_proc);
-      } else {
+      SgObject p;
+      retrieve_procedure(p, c->library, r->connection->log,
+			 &sg_conf->init_proc);
+      if (!SG_UNBOUNDP(p)) {
 	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
 		      "'sagittarius': calling init procedure '%V'",
 		      &sg_conf->init_proc);

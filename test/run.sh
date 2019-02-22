@@ -111,5 +111,21 @@ curl -si http://localhost:8080/no-lib > $tempfile
 # we don't setup html content so it's 404...
 check_status '404'
 
+echo
+echo "Test filters"
+curl -si http://localhost:8080/filters > $tempfile
+# we don't setup html content so it's 404...
+check_status '200'
+check_content 'filter 0'
+check_content 'filter 1'
+check_content 'filter 2'
+echo -n Filter execution order ...
+filter_content=$(cat $tempfile | tr '\n' ' ')
+if [[ $filter_content =~ 'filter 0 filter 1 filter 2' ]]; then
+    echo ok
+else
+    echo not ok
+fi
+
 # echo $tempfile
 rm $tempfile
