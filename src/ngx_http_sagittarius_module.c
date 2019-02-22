@@ -225,6 +225,7 @@ typedef struct
   SgObject schema;		/* http/https */
   SgObject body;		/* binary input port */
   SgObject context;
+  SgObject peer_certificate;
   ngx_http_request_t *rawNginxRequest;
   /* TODO maybe cache the builtin values? */
 } SgNginxRequest;
@@ -362,6 +363,39 @@ static void nr_cookies_set(SgNginxRequest *nr, SgObject cookies)
 #include "builtin_request_fields.inc"
 #undef HEADER_FIELD
 
+static SgObject x509_to_bytevector(X509 *x509)
+{
+  int len;
+  unsigned char *p;
+  SgObject bv;
+  
+  len = i2d_X509(x509, NULL);
+  bv = Sg_MakeByteVector(len, 0);
+  p = SG_BVECTOR_ELEMENTS(bv);
+  i2d_X509(x509, &p);
+  
+  return bv;
+}
+
+static SgObject nr_peer_certificate(SgNginxRequest *nr)
+{
+  if (SG_UNDEFP(nr->peer_certificate)) {
+    ngx_http_request_t *r = nr->rawNginxRequest;
+    ngx_connection_t *c = r->connection;
+    ngx_ssl_connection_t *ssl = c->ssl;
+    if (ssl) {
+      X509 *x509 = SSL_get_peer_certificate(c->ssl->connection);
+      nr->peer_certificate = x509_to_bytevector(x509);
+      
+      X509_free(x509);
+    } else {
+      nr->peer_certificate = SG_FALSE;
+    }
+  }
+  return nr->peer_certificate;
+}
+
+
 static SgSlotAccessor nr_slots[] = {
   SG_CLASS_SLOT_SPEC("method",     0, nr_method, NULL),
   SG_CLASS_SLOT_SPEC("uri",        1, nr_uri, NULL),
@@ -373,8 +407,9 @@ static SgSlotAccessor nr_slots[] = {
   SG_CLASS_SLOT_SPEC("schema",     7, nr_schema, NULL),
   SG_CLASS_SLOT_SPEC("input-port", 8, nr_body, NULL),
   SG_CLASS_SLOT_SPEC("context", 9, nr_context, NULL),
+  SG_CLASS_SLOT_SPEC("peer-certificate", 10, nr_peer_certificate, NULL),
 #define HEADER_FIELD(name, cname, n)				\
-  SG_CLASS_SLOT_SPEC(#name, n+9, SG_CPP_CAT(nr_, cname), NULL),
+  SG_CLASS_SLOT_SPEC(#name, n+10, SG_CPP_CAT(nr_, cname), NULL),
 #include "builtin_request_fields.inc"
 #undef HEADER_FIELD
   { { NULL } }
@@ -424,6 +459,9 @@ SG_DEFINE_GETTER("nginx-request-input-port", "nginx-request",
 SG_DEFINE_GETTER("nginx-request-context", "nginx-request",
 		 SG_NGINX_REQUESTP, nr_context, SG_NGINX_REQUEST,
 		 nginx_request_context);
+SG_DEFINE_GETTER("nginx-request-peer-certificate", "nginx-request",
+		 SG_NGINX_REQUESTP, nr_peer_certificate, SG_NGINX_REQUEST,
+		 nginx_request_peer_certificate);
 #define HEADER_FIELD(name, cname, n)					\
   SG_DEFINE_GETTER("nginx-request-"#name, "nginx-request",		\
 		   SG_NGINX_REQUESTP, SG_CPP_CAT(nr_, cname),		\
@@ -1224,6 +1262,8 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
 		  SG_PROC_NO_SIDE_EFFECT);
   INSERT_ACCESSOR("nginx-request-context", nginx_request_context,
 		  SG_PROC_NO_SIDE_EFFECT);
+  INSERT_ACCESSOR("nginx-request-peer-certificate",
+		  nginx_request_peer_certificate, SG_PROC_NO_SIDE_EFFECT);
 #define HEADER_FIELD(name, cname, n)		\
   INSERT_ACCESSOR("nginx-request-" #name, SG_CPP_CAT(nginx_request_, cname), \
 		  SG_PROC_NO_SIDE_EFFECT);
@@ -1691,6 +1731,7 @@ static SgObject make_nginx_request(ngx_http_request_t *req, SgObject context)
   ngxReq->body = make_request_input_port(req);
   ngxReq->rawNginxRequest = req;
   ngxReq->context = context;
+  ngxReq->peer_certificate = SG_UNDEF;
   return SG_OBJ(ngxReq);
 }
 

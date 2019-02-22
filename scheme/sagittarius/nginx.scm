@@ -37,6 +37,7 @@
 	    ;; nginx-request-schema ;; this seems useless...
 	    nginx-request-input-port
 	    nginx-request-context
+	    nginx-request-peer-certificate
 
 	    nginx-response?
 	    nginx-response-output-port
