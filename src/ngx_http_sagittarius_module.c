@@ -42,10 +42,12 @@ typedef struct
 
 typedef struct
 {
+  ngx_str_t name;
   ngx_str_t procedure;
   int order;
   int has_library;
   ngx_str_t library;
+  ngx_array_t *parameters;
 } sagittarius_filter_t;
 
 static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
@@ -209,7 +211,84 @@ static SgObject nginx_context_parameter_ref(SgObject *argv, int argc,
 }
 static SG_DEFINE_SUBR(nginx_context_parameter_ref_stub, 2, 0,
 		      nginx_context_parameter_ref, SG_FALSE, NULL);
-			
+
+typedef struct
+{
+  SG_HEADER;
+  SgObject name;
+  SgObject parameters;		/* parameters */
+} SgNginxFilterContext;
+SG_CLASS_DECL(Sg_NginxFilterContextClass)
+#define SG_CLASS_NGINX_FILTER_CONTEXT (&Sg_NginxFilterContextClass)
+#define SG_NGINX_FILTER_CONTEXT(obj)  ((SgNginxFilterContext *)obj)
+#define SG_NGINX_FILTER_CONTEXTP(obj)		\
+  SG_XTYPEP(obj, SG_CLASS_NGINX_FILTER_CONTEXT)
+static void nginx_filter_context_printer(SgObject self, SgPort *port,
+					 SgWriteContext *ctx)
+{
+  Sg_Printf(port, UC("#<nginx-filter-context %A>"),
+	    SG_NGINX_FILTER_CONTEXT(self)->name);
+}
+SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_NginxFilterContextClass,
+			       nginx_filter_context_printer);
+
+static SgObject nf_name(SgNginxFilterContext *nf)
+{
+  return nf->name;
+}
+
+static SgObject nf_parameters(SgNginxFilterContext *nf)
+{
+  return nf->parameters;
+}
+
+static SgSlotAccessor nf_slots[] = {
+  SG_CLASS_SLOT_SPEC("name",      0, nf_name, NULL),
+  SG_CLASS_SLOT_SPEC("parameters",1, nf_parameters, NULL),
+  { { NULL } }
+};
+
+static SgObject nginx_filter_context_p(SgObject *argv, int argc, void *data)
+{
+  if (argc != 1) {
+    Sg_WrongNumberOfArgumentsViolation(SG_INTERN("nginx-filter-context?"), 1,
+				       argc, SG_NIL);
+  }
+  return SG_MAKE_BOOL(SG_NGINX_FILTER_CONTEXT(argv[0]));
+}
+static SG_DEFINE_SUBR(nginx_filter_context_p_stub, 1, 0,
+		      nginx_filter_context_p, SG_FALSE, NULL);
+
+static SgObject nginx_filter_context_parameter_ref(SgObject *argv, int argc,
+						   void *data)
+{
+  SgObject parameters;
+  if (argc != 2) {
+    Sg_WrongNumberOfArgumentsViolation(SG_INTERN("nginx-filter-context-parameter-ref"),
+				       2, argc, SG_NIL);
+  }
+  if (!SG_NGINX_FILTER_CONTEXTP(argv[0])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-filter-context-filter-parameter-ref"),
+				    SG_INTERN("nginx-filter-context"),
+				    argv[0], SG_NIL);
+  }
+  if (!SG_STRINGP(argv[1])) {
+    Sg_WrongTypeOfArgumentViolation(SG_INTERN("nginx-filter-context-parameter-ref"),
+				    SG_INTERN("string"),
+				    argv[1], SG_NIL);
+  }
+  parameters = SG_NGINX_FILTER_CONTEXT(argv[0])->parameters;
+  if (SG_FALSEP(parameters)) return SG_FALSE;
+  return Sg_HashTableRef(SG_HASHTABLE(parameters), argv[1], SG_FALSE);
+}
+static SG_DEFINE_SUBR(nginx_filter_context_parameter_ref_stub, 2, 0,
+		      nginx_filter_context_parameter_ref, SG_FALSE, NULL);
+
+SG_DEFINE_GETTER("nginx-filter-context-name", "nginx-filter-context",
+		 SG_NGINX_FILTER_CONTEXTP, nf_name, SG_NGINX_FILTER_CONTEXT,
+		 nginx_filter_context_name);
+
+
 typedef struct
 {
   SG_HEADER;
@@ -1174,6 +1253,10 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
   Sg_InitStaticClassWithMeta(SG_CLASS_NGINX_CONTEXT, UC("<nginx-context>"),
 			     SG_LIBRARY(lib), NULL,
 			     SG_FALSE, nc_slots, 0);
+  Sg_InitStaticClassWithMeta(SG_CLASS_NGINX_FILTER_CONTEXT,
+			     UC("<nginx-filter-context>"),
+			     SG_LIBRARY(lib), NULL,
+			     SG_FALSE, nf_slots, 0);
   Sg_InitStaticClassWithMeta(SG_CLASS_NGINX_REQUEST, UC("<nginx-request>"),
 			     SG_LIBRARY(lib), NULL,
 			     SG_FALSE, nr_slots, 0);
@@ -1194,6 +1277,29 @@ static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle)
     SG_MAKE_STRING("nginx-context-parameter-ref");
   SG_PROCEDURE_TRANSPARENT(&nginx_context_parameter_ref_stub) =
     SG_PROC_NO_SIDE_EFFECT;
+
+  Sg_InsertBinding(SG_LIBRARY(lib),
+		   SG_INTERN("nginx-filter-context?"),
+		   &nginx_filter_context_p_stub);
+  SG_PROCEDURE_NAME(&nginx_filter_context_p_stub) =
+    SG_MAKE_STRING("nginx-filter-context?");
+  SG_PROCEDURE_TRANSPARENT(&nginx_filter_context_p_stub) = SG_PROC_TRANSPARENT;
+
+  Sg_InsertBinding(SG_LIBRARY(lib),
+		   SG_INTERN("nginx-filter-context-parameter-ref"),
+		   &nginx_filter_context_parameter_ref_stub);
+  SG_PROCEDURE_NAME(&nginx_filter_context_parameter_ref_stub) =
+    SG_MAKE_STRING("nginx-filter-context-parameter-ref");
+  SG_PROCEDURE_TRANSPARENT(&nginx_filter_context_parameter_ref_stub) =
+    SG_PROC_NO_SIDE_EFFECT;
+  Sg_InsertBinding(SG_LIBRARY(lib),
+		   SG_INTERN("nginx-filter-context-name"),
+		   &nginx_filter_context_name_stub);
+  SG_PROCEDURE_NAME(&nginx_filter_context_name_stub) =
+    SG_MAKE_STRING("nginx-filter-context-name");
+  SG_PROCEDURE_TRANSPARENT(&nginx_filter_context_name_stub) =
+    SG_PROC_NO_SIDE_EFFECT;
+
   
   Sg_InsertBinding(SG_LIBRARY(lib),
 		   SG_INTERN("nginx-request?"), &nginx_request_p_stub);
@@ -1410,6 +1516,27 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
   return NGX_CONF_OK;
 }
 
+static sagittarius_filter_t *get_or_push(ngx_log_t *log,
+					 ngx_array_t *filters, ngx_str_t *name)
+{
+  sagittarius_filter_t *e, *values;
+  ngx_str_t null_str = ngx_null_string;
+  ngx_uint_t i;
+  values = filters->elts;
+
+  for (i = 0; i < filters->nelts; i++) {
+    e = &values[i];
+    if (ngx_strcmp(e->name.data, name->data) == 0) return e;
+  }
+  e = ngx_array_push(filters);
+  /* new creation... */
+  e->procedure = null_str;
+  e->library = null_str;
+  e->name.data = name->data;
+  e->name.len = name->len;
+  return e;
+}
+
 static char* ngx_http_sagittarius(ngx_conf_t *cf,
 				  ngx_command_t *dummy,
 				  void *conf)
@@ -1422,9 +1549,9 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
   value = cf->args->elts;
 #define allocate_array(to, init, st)					\
   do {									\
-    if (!sg_conf-> to ) {						\
-      sg_conf-> to = ngx_array_create(cf->pool, (init), sizeof(st));	\
-      if (!sg_conf-> to ) {						\
+    if (!(to) ) {							\
+      (to) = ngx_array_create(cf->pool, (init), sizeof(st));		\
+      if (!(to) ) {							\
 	ngx_log_error(NGX_LOG_ERR, cf->log, 0,				\
 		      "'sagittarius': Failed to allocate an array");	\
 	return NGX_CONF_ERROR;						\
@@ -1439,7 +1566,7 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 		    "'load_path' must take at least one argument");
       return NGX_CONF_ERROR;
     }
-    allocate_array(load_paths, 0, ngx_str_t);
+    allocate_array(sg_conf->load_paths, 0, ngx_str_t);
     prefix = &cf->cycle->prefix;
     elts = ngx_array_push_n(sg_conf->load_paths, cf->args->nelts-1);
 
@@ -1469,7 +1596,7 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
        I think it's a bug of NGINX ngx_array_push since it doesn't handle
        zero initial array properly...
     */
-    allocate_array(parameters, 1, ngx_keyval_t);
+    allocate_array(sg_conf->parameters, 1, ngx_keyval_t);
     if (cf->args->nelts != 3) {
       ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		    "'sagittarius': 'parameter' must contain "
@@ -1481,22 +1608,38 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     e->value = value[2];
   } else if (ngx_strcmp(value[0].data, "filter") == 0) {
     sagittarius_filter_t *e;
-    allocate_array(filters, 1, sagittarius_filter_t);
-    if (cf->args->nelts < 3) {
+    allocate_array(sg_conf->filters, 1, sagittarius_filter_t);
+    if (cf->args->nelts < 4) {
       ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		    "'sagittarius': 'filter' must contain at least"
-		    "2 elements (entry_point and order)");
+		    "3 elements (name, entry_point and order)");
       return NGX_CONF_ERROR;
     }
-    e = ngx_array_push(sg_conf->filters);
-    e->procedure = value[1];
-    e->order = ngx_atoi(value[2].data, value[2].len);
-    if (cf->args->nelts == 4) {
+    e = get_or_push(cf->log, sg_conf->filters, &value[1]);
+    e->procedure = value[2];
+    e->order = ngx_atoi(value[3].data, value[3].len);
+    if (cf->args->nelts == 5) {
       e->has_library = TRUE;
-      e->library = value[3];
+      e->library = value[4];
     } else {
       e->has_library = FALSE;
     }
+  } else if (ngx_strcmp(value[0].data, "filter_parameter") == 0) {
+    sagittarius_filter_t *e;
+    ngx_keyval_t *kv;
+    allocate_array(sg_conf->filters, 1, sagittarius_filter_t);
+    if (cf->args->nelts != 4) {
+      ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		    "'sagittarius': 'filter_parameter' must contain"
+		    "3 elements (name, key and value)");
+      return NGX_CONF_ERROR;
+    }
+    /* We allow reverse order of configuration  */    
+    e = get_or_push(cf->log, sg_conf->filters, &value[1]);
+    allocate_array(e->parameters, 1, ngx_keyval_t);
+    kv = ngx_array_push(e->parameters);
+    kv->key = value[2];
+    kv->value = value[3];
   } else {
     ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		  "'sagittarius': unknown directive %V", &value[0]);
@@ -1554,23 +1697,47 @@ static int filter_compare(const void *a, const void *b)
 
 static SgObject filter_caller(SgObject *args, int argc, void *data)
 {
-  SgObject filter = SG_CAR(SG_OBJ(data));
-  SgObject next = SG_CDR(SG_OBJ(data));
-  return Sg_VMApply3(filter, args[0], args[1], next);
+  SgObject ctx = SG_CAR(SG_OBJ(data));
+  SgObject filter = SG_CADR(SG_OBJ(data));
+  SgObject next = SG_CDDR(SG_OBJ(data));
+  return Sg_VMApply4(filter, ctx, args[0], args[1], next);
 }
 
-static SgObject combine_filter(SgObject filter, SgObject next)
+static SgObject combine_filter(sagittarius_filter_t *fc,
+			       SgObject filter, SgObject next)
 {
+  SgNginxFilterContext *ctx = SG_NEW(SgNginxFilterContext);
+  ngx_keyval_t *e, *value;
+  ngx_uint_t i;
+
+  SG_SET_CLASS(ctx, SG_CLASS_NGINX_FILTER_CONTEXT);
+
+  ctx->name = ngx_str_to_string(&fc->name);
+  if (fc->parameters) {
+    ctx->parameters = Sg_MakeHashTableSimple(SG_HASH_STRING,
+					     fc->parameters->nelts);
+    value = fc->parameters->elts;
+    for (i = 0; i < fc->parameters->nelts; i++) {
+      e = &value[i];
+      Sg_HashTableSet(ctx->parameters,
+		      ngx_str_to_string(&e->key),
+		      ngx_str_to_string(&e->value),
+		      0);
+    }
+  } else {
+    ctx->parameters = SG_FALSE;
+  }
   /* 
-     (lambda (request response) (filter request response next))
+     (lambda (request response) (filter context request response next))
    */
-  return Sg_MakeSubr(filter_caller, Sg_Cons(filter, next), 2, 0,
+  return Sg_MakeSubr(filter_caller, Sg_Cons(ctx, Sg_Cons(filter, next)), 2, 0,
 		     SG_MAKE_STRING("filter-chain"));
 }
 
-static SgObject get_filter_applied_procedure(SgObject library,
-					     ngx_log_t *log,
-					     ngx_http_sagittarius_conf_t *sg_conf)
+static
+SgObject get_filter_applied_procedure(SgObject library,
+				      ngx_log_t *log,
+				      ngx_http_sagittarius_conf_t *sg_conf)
 {
   SgObject proc, next;
   ngx_uint_t i;
@@ -1585,6 +1752,7 @@ static SgObject get_filter_applied_procedure(SgObject library,
   }
 
   if (!sg_conf->filters) return proc;
+  
   ngx_qsort(sg_conf->filters->elts, sg_conf->filters->nelts,
 	    sg_conf->filters->size, filter_compare);
   values = sg_conf->filters->elts;
@@ -1592,6 +1760,8 @@ static SgObject get_filter_applied_procedure(SgObject library,
   for (i = 0; i < sg_conf->filters->nelts; i++) {
     sagittarius_filter_t *f = &values[i];
     SgObject lib = library, filter;
+    
+    if (f->procedure.len == 0) continue;
     if (f->has_library) {
       lib = Sg_FindLibrary(Sg_Intern(ngx_str_to_string(&f->library)), FALSE);
       if (SG_FALSEP(lib)) {
@@ -1602,9 +1772,11 @@ static SgObject get_filter_applied_procedure(SgObject library,
       }
     }
     retrieve_procedure(filter, lib, log, &f->procedure);
-    next = combine_filter(filter, next);
+    ngx_log_error(NGX_LOG_DEBUG, log, 0,
+		  "'sagittarius': Combining filter %V (order %d).",
+		  &f->name, f->order);
+    next = combine_filter(f, filter, next);
   }
-  
   return next;
 }
 
@@ -1787,6 +1959,7 @@ static ngx_int_t sagittarius_call(ngx_http_request_t *r)
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		  "'sagittarius': Failed to execute nginx-dispatch-request");
     vm->loadPath = saved_loadpath;
+    ngx_http_discard_request_body(r);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;    
   } SG_END_PROTECT;
 
