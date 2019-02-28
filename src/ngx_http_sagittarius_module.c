@@ -20,8 +20,11 @@ sagittarius $entry-point [$init] [$cleanup] {
   library "(your web library)";
   parameter var0 value0;
   parameter var1 varlu1;
-  filter "do-filter" 0 "(your filter library)";
-  filter "do-filter" 1; # if the library is the same as the web app library
+  filter name1 "do-filter" 0 "(your filter library)";
+  filter_parameter name1 key1 value1; # filter parameter for filter 'name1'
+  # if the library is the same as the web app library
+  filter name2 "do-filter" 1;
+  thread_pool_name pool_name; # refering the name of thread pool
 }
 
 We do not use SgObject here. I'm not sure when the configuration parsing 
@@ -38,6 +41,7 @@ typedef struct
   /* context parameters, this is a temporary storage */
   ngx_array_t *parameters;	/* array of ngx_table_elt_t */
   ngx_array_t *filters;		/* array of sagittarius_filter_t */
+  ngx_str_t pool_name;		/* thread pool name */
 } ngx_http_sagittarius_conf_t;
 
 typedef struct
@@ -57,6 +61,7 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
 				  ngx_command_t *dummy,
 				  void *conf);
 static ngx_int_t ngx_http_sagittarius_preconfiguration(ngx_conf_t *cf);
+static ngx_int_t ngx_http_sagittarius_postconfiguration(ngx_conf_t *cf);
 static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
 						 void *p, void *c);
@@ -77,7 +82,7 @@ static ngx_command_t ngx_http_sagittarius_commands[] = {
 
 static ngx_http_module_t ngx_http_sagittarius_module_ctx = {
   ngx_http_sagittarius_preconfiguration, /* preconfiguration */
-  NULL,				/* postconfiguration */
+  ngx_http_sagittarius_postconfiguration, /* postconfiguration */
   NULL, 			/* create main confiugraetion */
   NULL, 			/* init main configuration */
   NULL,				/* create server configuration */
@@ -1405,6 +1410,7 @@ typedef struct
 {
   ngx_str_node_t sn;
   SgObject       context;
+  ngx_http_sagittarius_conf_t *conf; /* temporary storage */
 } nginx_context_node_t;
 
 static void call_cleanup(ngx_cycle_t *cycle, ngx_rbtree_node_t *node)
@@ -1446,6 +1452,38 @@ static ngx_int_t ngx_http_sagittarius_preconfiguration(ngx_conf_t *cf)
   return NGX_OK;
 }
 
+static void init_thread_pool(ngx_conf_t *cf, ngx_rbtree_node_t *node)
+{
+  nginx_context_node_t *cn;
+  if (node != nginx_contexts.sentinel) {
+    ngx_str_t nstr = ngx_null_string;
+    cn = (nginx_context_node_t *)node;
+
+    if (cn->conf->pool_name.len != 0) {
+      ngx_thread_pool_t *tp = ngx_thread_pool_add(cf, &cn->conf->pool_name);
+      if (tp == NULL) {
+	ngx_log_error(NGX_LOG_WARN, cf->log, 0,
+		      "'sagittarius': Failed to add thread pool '%V' for '%V'",
+		      &cn->conf->pool_name, &cn->sn.str);
+	cn->conf->pool_name = nstr; /* reset the name */
+      } else {
+	ngx_log_error(NGX_LOG_DEBUG, cf->log, 0,
+		      "'sagittarius': Added thread pool '%V' for '%V'",
+		      &cn->conf->pool_name, &cn->sn.str);
+      }
+    }
+    init_thread_pool(cf, node->left);
+    init_thread_pool(cf, node->right);
+  }
+}
+
+static ngx_int_t ngx_http_sagittarius_postconfiguration(ngx_conf_t *cf)
+{
+  /* initialise the thread pool */
+  init_thread_pool(cf, nginx_contexts.root);
+  return NGX_OK;
+}
+
 static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r);
 static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 					ngx_command_t *cmd,
@@ -1465,6 +1503,7 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
   hash = ngx_crc32_long(clcf->name.data, clcf->name.len);
   node = (nginx_context_node_t *)
     ngx_str_rbtree_lookup(&nginx_contexts, &clcf->name, hash);
+  sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   if (!node) {
     /* okay insert it */
     node = ngx_palloc(cf->pool, sizeof(nginx_context_node_t));
@@ -1476,6 +1515,7 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
     node->sn.node.key = hash;
     node->sn.str = clcf->name;
     node->context = SG_FALSE;
+    node->conf = sg_conf;	/* for thread pool */
     /* 
        the sn.node is the top most location of the struct. thus inserthing
        this also means inserting the node itself.
@@ -1484,7 +1524,6 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
   }
   
   value = cf->args->elts;
-  sg_conf = (ngx_http_sagittarius_conf_t *)conf;
   sg_conf->procedure = (ngx_str_t)value[1];
   if (cf->args->nelts > 2) {
     sg_conf->init_proc = (ngx_str_t)value[2];
@@ -1640,6 +1679,14 @@ static char* ngx_http_sagittarius(ngx_conf_t *cf,
     kv = ngx_array_push(e->parameters);
     kv->key = value[2];
     kv->value = value[3];
+  } else if (ngx_strcmp(value[0].data, "thread_pool_name") == 0) {
+    if (cf->args->nelts != 2) {
+      ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		    "'sagittarius': 'thread_pool' must contain"
+		    "1 element (pool_name)");
+      return NGX_CONF_ERROR;
+    }
+    sg_conf->pool_name = value[1];
   } else {
     ngx_log_error(NGX_LOG_ERR, cf->log, 0,
 		  "'sagittarius': unknown directive %V", &value[0]);
@@ -1662,6 +1709,7 @@ static void* ngx_http_sagittarius_create_loc_conf(ngx_conf_t *cf)
   conf->cleanup_proc = nstr;
   conf->parameters = NULL;
   conf->filters = NULL;
+  conf->pool_name = nstr;
   return conf;
 }
 
