@@ -2172,6 +2172,16 @@ static ngx_int_t sagittarius_precontent_handler(ngx_http_request_t *r)
 		    "'sagittarius': Re-entering the handler");
       return NGX_DECLINED;
     } else {
+      /* a bit of code duplication but we need to initialise it here */
+      if (SG_UNDEFP(nginx_dispatch)) {
+	SgVM *vm = Sg_VM();
+	SgObject saved = setup_load_path(vm, r->connection->log, sg_conf);
+	if (init_base_library(r->connection->log) != NGX_OK) {
+	  return NGX_HTTP_INTERNAL_SERVER_ERROR;
+	}
+	vm->loadPath = saved;
+      }
+      
       ctx = ngx_pcalloc(r->pool, sizeof(thread_request_ctx_t));
       if (ctx == NULL) return NGX_HTTP_INTERNAL_SERVER_ERROR;
 
