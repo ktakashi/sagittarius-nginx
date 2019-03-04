@@ -2116,8 +2116,12 @@ static void* alien_thread_invoker(void *data)
 {
   thread_task_ctx_t *task_ctx = data;
   ngx_http_request_t *r = task_ctx->request_ctx->request;
+  ngx_int_t rc;
   Sg_SetCurrentVM(task_ctx->vm);
-  ngx_http_sagittarius_handle_request(r);
+  rc = ngx_http_sagittarius_handle_request(r);
+  if (rc != NGX_DONE) {
+    ngx_http_finalize_request(r, rc);
+  }
   return NULL;
 }
 
@@ -2127,7 +2131,6 @@ static void ngx_http_sagittarius_task_handler(void *data, ngx_log_t *log)
   ngx_http_request_t *r = task_ctx->request_ctx->request;
   ngx_connection_t *c = r->connection;
 
-  ngx_log_error(NGX_LOG_DEBUG, log, 0, "'sagittarius': In Task");
   ngx_http_set_log_request(c->log, r);
   Sg_InvokeOnAlienThread(alien_thread_invoker, task_ctx);
 }
@@ -2141,12 +2144,11 @@ static void ngx_http_sagittarius_task_completion_handler(ngx_event_t *ev)
   c = r->connection;
 
   ngx_http_set_log_request(c->log, r);
-  ngx_log_error(NGX_LOG_DEBUG, c->log, 0, "'sagittarius': Task complete");
   r->main->blocked--;
   r->aio = 0;
 
   if (r->done) {
-      c->write->handler(c->write);
+    c->write->handler(c->write);
   } else {
     r->write_event_handler(r);
     ngx_http_run_posted_requests(c);
@@ -2166,11 +2168,9 @@ static ngx_int_t sagittarius_precontent_handler(ngx_http_request_t *r)
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_sagittarius_module);
     if (ctx != NULL) {
-      /* okay, what to do? */
-      ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 		    "'sagittarius': Re-entering the handler");
-      /* This path is usual GET request, how can we finish the request??? */
-      return r->headers_out.status;
+      return NGX_DECLINED;
     } else {
       ctx = ngx_pcalloc(r->pool, sizeof(thread_request_ctx_t));
       if (ctx == NULL) return NGX_HTTP_INTERNAL_SERVER_ERROR;
