@@ -69,6 +69,8 @@ static char* ngx_http_sagittarius_merge_loc_conf(ngx_conf_t *cf,
 static ngx_int_t ngx_http_sagittarius_init_process(ngx_cycle_t *cycle);
 static void      ngx_http_sagittarius_exit_process(ngx_cycle_t *cycle);
 
+static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r);
+
 static ngx_command_t ngx_http_sagittarius_commands[] = {
   {
     ngx_string("sagittarius"),
@@ -1186,7 +1188,7 @@ static int64_t response_out_put_u8_array(SgObject self, uint8_t *ba,
   int64_t written;
   ngx_buf_t *buf;		/*  current buffer */
   unsigned char *be;
-  
+
   if (!SG_RESPONSE_OUTPUT_PORT_BUFFER(self)) {
     allocate_buffer(self);
     SG_RESPONSE_OUTPUT_PORT_ROOT(self) = SG_RESPONSE_OUTPUT_PORT_BUFFER(self);
@@ -1452,6 +1454,9 @@ static ngx_int_t ngx_http_sagittarius_preconfiguration(ngx_conf_t *cf)
   return NGX_OK;
 }
 
+
+static ngx_int_t sagittarius_precontent_handler(ngx_http_request_t *r);
+
 static void init_thread_pool(ngx_conf_t *cf, ngx_rbtree_node_t *node)
 {
   nginx_context_node_t *cn;
@@ -1460,7 +1465,9 @@ static void init_thread_pool(ngx_conf_t *cf, ngx_rbtree_node_t *node)
     cn = (nginx_context_node_t *)node;
 
     if (cn->conf->pool_name.len != 0) {
-      ngx_thread_pool_t *tp = ngx_thread_pool_add(cf, &cn->conf->pool_name);
+      ngx_thread_pool_t *tp;
+
+      tp = ngx_thread_pool_add(cf, &cn->conf->pool_name);
       if (tp == NULL) {
 	ngx_log_error(NGX_LOG_WARN, cf->log, 0,
 		      "'sagittarius': Failed to add thread pool '%V' for '%V'",
@@ -1479,12 +1486,23 @@ static void init_thread_pool(ngx_conf_t *cf, ngx_rbtree_node_t *node)
 
 static ngx_int_t ngx_http_sagittarius_postconfiguration(ngx_conf_t *cf)
 {
+  ngx_http_handler_pt *h;
+  ngx_http_core_main_conf_t *cmcf;
+
+  cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+  h = ngx_array_push(&cmcf->phases[NGX_HTTP_PRECONTENT_PHASE].handlers);
+  if (h == NULL) {
+    ngx_log_error(NGX_LOG_ERR, cf->log, 0,
+		  "'sagittarius': Failed precontent phase handler");
+    return NGX_ERROR;
+  }
+  *h = sagittarius_precontent_handler;
+
   /* initialise the thread pool */
   init_thread_pool(cf, nginx_contexts.root);
   return NGX_OK;
 }
 
-static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r);
 static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 					ngx_command_t *cmd,
 					void *conf)
@@ -1549,8 +1567,10 @@ static char* ngx_http_sagittarius_block(ngx_conf_t *cf,
 		  "'sagittarius': 'library' must be specified");
     return NGX_CONF_ERROR;
   }
-  
-  clcf->handler = ngx_http_sagittarius_handler;
+
+  if (sg_conf->pool_name.len == 0) {
+    clcf->handler = ngx_http_sagittarius_handler;
+  }
   
   return NGX_CONF_OK;
 }
@@ -1800,7 +1820,7 @@ SgObject get_filter_applied_procedure(SgObject library,
   }
 
   if (!sg_conf->filters) return proc;
-  
+    
   ngx_qsort(sg_conf->filters->elts, sg_conf->filters->nelts,
 	    sg_conf->filters->size, filter_compare);
   values = sg_conf->filters->elts;
@@ -1873,7 +1893,7 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
 		      "'sagittarius': calling init procedure '%V'",
 		      &sg_conf->init_proc);
 	SG_UNWIND_PROTECT {
-	  Sg_Apply1(SG_GLOC_GET(SG_GLOC(p)), c);
+	  Sg_Apply1(p, c);
 	} SG_WHEN_ERROR {
 	  ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 			"'sagittarius': Failed to call init procedure");
@@ -1982,9 +2002,11 @@ static ngx_int_t sagittarius_call(ngx_http_request_t *r)
   ngx_int_t rc;
   ngx_chain_t *out;
   ngx_http_sagittarius_conf_t *sg_conf;
-
+      
   sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
+
   vm = Sg_VM();
+
   saved_loadpath = setup_load_path(vm, r->connection->log, sg_conf);
   /* The dispatcher will always be the same so no lock needed */
   if (SG_UNDEFP(nginx_dispatch)) {
@@ -2060,14 +2082,9 @@ static void ngx_http_request_body_init(ngx_http_request_t *r)
   ngx_http_finalize_request(r, sagittarius_call(r));
 }
 
-/* Main handler */
-static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
+static ngx_int_t ngx_http_sagittarius_handle_request(ngx_http_request_t *r)
 {
   ngx_int_t rc;
-  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-		"'sagittarius': Handling Sagittarius request for %V %V.",
-		&r->method_name, &r->uri);
-
   if (r->headers_in.content_length_n > 0 || r->headers_in.chunked) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
 		  "'sagittarius': reading client body %d",
@@ -2079,6 +2096,141 @@ static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
     return NGX_DONE;
   }
   return sagittarius_call(r);
+} 
+
+typedef struct
+{
+  ngx_http_request_t *request;
+  /* TBD */
+} thread_request_ctx_t;
+
+
+typedef struct
+{
+  thread_request_ctx_t *request_ctx;
+  SgVM *vm;
+  /* TBD */
+} thread_task_ctx_t;
+
+static void* alien_thread_invoker(void *data)
+{
+  thread_task_ctx_t *task_ctx = data;
+  ngx_http_request_t *r = task_ctx->request_ctx->request;
+  Sg_SetCurrentVM(task_ctx->vm);
+  ngx_http_sagittarius_handle_request(r);
+  return NULL;
+}
+
+static void ngx_http_sagittarius_task_handler(void *data, ngx_log_t *log)
+{
+  thread_task_ctx_t *task_ctx = data;
+  ngx_http_request_t *r = task_ctx->request_ctx->request;
+  ngx_connection_t *c = r->connection;
+
+  ngx_log_error(NGX_LOG_DEBUG, log, 0, "'sagittarius': In Task");
+  ngx_http_set_log_request(c->log, r);
+  Sg_InvokeOnAlienThread(alien_thread_invoker, task_ctx);
+}
+
+static void ngx_http_sagittarius_task_completion_handler(ngx_event_t *ev)
+{
+  ngx_connection_t *c;
+  ngx_http_request_t *r;
+  thread_request_ctx_t *ctx = ev->data;
+  r = ctx->request;
+  c = r->connection;
+
+  ngx_http_set_log_request(c->log, r);
+  ngx_log_error(NGX_LOG_DEBUG, c->log, 0, "'sagittarius': Task complete");
+  r->main->blocked--;
+  r->aio = 0;
+
+  if (r->done) {
+      c->write->handler(c->write);
+  } else {
+    r->write_event_handler(r);
+    ngx_http_run_posted_requests(c);
+  }
+}
+
+static ngx_int_t sagittarius_precontent_handler(ngx_http_request_t *r)
+{
+  ngx_http_sagittarius_conf_t *sg_conf;
+
+  sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
+  if (!r->content_handler && sg_conf && sg_conf->pool_name.len != 0) {
+    ngx_thread_pool_t *tp;
+    ngx_thread_task_t *task;
+    thread_task_ctx_t *task_ctx;
+    thread_request_ctx_t *ctx;
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_sagittarius_module);
+    if (ctx != NULL) {
+      /* okay, what to do? */
+      ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		    "'sagittarius': Re-entering the handler");
+      /* This path is usual GET request, how can we finish the request??? */
+      return r->headers_out.status;
+    } else {
+      ctx = ngx_pcalloc(r->pool, sizeof(thread_request_ctx_t));
+      if (ctx == NULL) return NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+      ngx_http_set_ctx(r, ctx, ngx_http_sagittarius_module);
+	    
+      tp = ngx_thread_pool_get((ngx_cycle_t *)ngx_cycle, &sg_conf->pool_name);
+
+      if (tp == NULL) {
+	ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		      "'sagittarius': Thread pool %V not found",
+		      &sg_conf->pool_name);
+	return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
+      task = ngx_thread_task_alloc(r->connection->pool,
+				   sizeof(thread_task_ctx_t));
+      if (task == NULL) {
+	ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		      "'sagittarius': Failed to allocation a new task");
+	return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
+      ctx->request = r;
+      
+      task_ctx = task->ctx;
+      task_ctx->request_ctx = ctx;
+      task_ctx->vm = Sg_NewVM(Sg_VM(), SG_MAKE_STRING("worker vm"));
+      task->handler = ngx_http_sagittarius_task_handler;
+      task->event.handler = ngx_http_sagittarius_task_completion_handler;
+      task->event.data = ctx;
+
+      if (ngx_thread_task_post(tp, task) != NGX_OK) {
+	ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		      "'sagittarius': Failed to post a new task to %V",
+		      &sg_conf->pool_name);
+	return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
+      r->main->blocked++;
+      r->aio = 1;
+      return NGX_AGAIN;
+    }
+  }
+  return NGX_OK;
+}
+
+/* Main handler */
+static ngx_int_t ngx_http_sagittarius_handler(ngx_http_request_t *r)
+{
+  ngx_http_sagittarius_conf_t *sg_conf;
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+		"'sagittarius': Handling Sagittarius request for %V %V.",
+		&r->method_name, &r->uri);
+  
+  sg_conf = ngx_http_get_module_loc_conf(r, ngx_http_sagittarius_module);
+
+  if (sg_conf->pool_name.len != 0) {
+    /* it should already be handled so decline it here */
+    return NGX_DECLINED;
+  } else {
+    return ngx_http_sagittarius_handle_request(r);
+  }
 }
 
 static ngx_int_t init_base_library(ngx_log_t *log)
@@ -2115,7 +2267,7 @@ static SgObject setup_load_path(volatile SgVM *vm,
   SgObject saved_loadpath = vm->loadPath;
   ngx_uint_t i;
   ngx_str_t *value;
-  
+
   if (sg_conf->load_paths) {
     value = sg_conf->load_paths->elts;
     for (i = 0; i < sg_conf->load_paths->nelts; i++) {

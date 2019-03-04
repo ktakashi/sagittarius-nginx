@@ -2,6 +2,7 @@
 (library (webapp)
     (export run)
     (import (rnrs)
+	    (sagittarius)
 	    (sagittarius nginx))
 
 (define (run request response) 

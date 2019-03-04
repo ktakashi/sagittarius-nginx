@@ -69,9 +69,9 @@
 	   (else #f)))
   (define (safe-parse-cookies-string str)
     (guard (e (else '())) (parse-cookies-string str)))
-  (nginx-request-cookies-set! request
-    (append-map safe-parse-cookies-string (nginx-request-cookies request)))
   (guard (e (else (report-error e) #f))
+    (nginx-request-cookies-set! request
+     (append-map safe-parse-cookies-string (nginx-request-cookies request)))
     (let-values (((status content-type) (procedure request response)))
       (cond  ((->contnet-type-string content-type) =>
 	      (lambda (ctype) (nginx-response-content-type-set! response ctype))))
