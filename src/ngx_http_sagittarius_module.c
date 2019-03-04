@@ -1421,7 +1421,8 @@ static void call_cleanup(ngx_cycle_t *cycle, ngx_rbtree_node_t *node)
   if (node != nginx_contexts.sentinel) {
     cn = (nginx_context_node_t *)node;
     if (!SG_FALSEP(cn->context) &&
-	!SG_FALSEP(SG_NGINX_CONTEXT(cn->context)->cleanup)) {
+	!SG_FALSEP(SG_NGINX_CONTEXT(cn->context)->cleanup) &&
+	!SG_UNBOUNDP(SG_NGINX_CONTEXT(cn->context)->cleanup)) {
       ngx_log_error(NGX_LOG_DEBUG, cycle->log, 0,
 		    "'sagittarius': Cleaning up context '%V'", &cn->sn.str);
       SG_UNWIND_PROTECT {
