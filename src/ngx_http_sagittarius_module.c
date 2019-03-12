@@ -1915,6 +1915,21 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
   return SG_OBJ(c);
 }
 
+static int has_context(ngx_http_request_t *r)
+{
+  ngx_http_core_loc_conf_t *clcf;
+  nginx_context_node_t     *node;
+  uint32_t                  hash;
+
+  clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+  hash = ngx_crc32_long(clcf->name.data, clcf->name.len);
+  node = (nginx_context_node_t *)
+    ngx_str_rbtree_lookup(&nginx_contexts, &clcf->name, hash);
+
+  if (!node) return FALSE;	/* ??? */
+  return !SG_FALSEP(node->context);
+}
+
 static SgObject get_context(ngx_http_request_t *r)
 {
   ngx_http_core_loc_conf_t *clcf;
@@ -2173,16 +2188,21 @@ static ngx_int_t sagittarius_precontent_handler(ngx_http_request_t *r)
 		    "'sagittarius': Re-entering the handler");
       return NGX_DECLINED;
     } else {
-      /* a bit of code duplication but we need to initialise it here */
-      if (SG_UNDEFP(nginx_dispatch)) {
-	SgVM *vm = Sg_VM();
+      SgVM *vm = Sg_VM();
+      /* context must be initialised before getting into the thread.
+	 a bit of code duplication but we need to initialise it here */
+      if (!has_context(r)) {
 	SgObject saved = setup_load_path(vm, r->connection->log, sg_conf);
-	if (init_base_library(r->connection->log) != NGX_OK) {
-	  return NGX_HTTP_INTERNAL_SERVER_ERROR;
+	/* If the context is not there, this may not be loaded either. */
+	if (SG_UNDEFP(nginx_dispatch)) {
+	  if (init_base_library(r->connection->log) != NGX_OK) {
+	    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+	  }
 	}
-	vm->loadPath = saved;
+	get_context(r);
+      	vm->loadPath = saved;
       }
-      
+
       ctx = ngx_pcalloc(r->pool, sizeof(thread_request_ctx_t));
       if (ctx == NULL) return NGX_HTTP_INTERNAL_SERVER_ERROR;
 
@@ -2207,7 +2227,7 @@ static ngx_int_t sagittarius_precontent_handler(ngx_http_request_t *r)
       
       task_ctx = task->ctx;
       task_ctx->request_ctx = ctx;
-      task_ctx->vm = Sg_NewVM(Sg_VM(), SG_MAKE_STRING("worker vm"));
+      task_ctx->vm = Sg_NewVM(vm, SG_MAKE_STRING("worker vm"));
       task->handler = ngx_http_sagittarius_task_handler;
       task->event.handler = ngx_http_sagittarius_task_completion_handler;
       task->event.data = ctx;
