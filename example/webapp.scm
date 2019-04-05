@@ -1,4 +1,5 @@
 ;; example application for Sagittarius NGINX
+#!read-macro=sagittarius/bv-string
 (library (webapp)
     (export run)
     (import (rnrs)
@@ -16,9 +17,12 @@
 	   (newline out)
 	   (put-string out (nginx-context-parameter-ref context "key0"))
 	   (newline out))
-	  (else (put-string out (utf8->string echo)))))
-
-  (nginx-response-header-add! response "Foo" "bar")
-  (values 200 'text/plain))
+	  ((bytevector=? echo #*"no-content"))
+	  (else (put-string out (utf8->string echo))))
+    
+    (nginx-response-header-add! response "Foo" "bar")
+    (if (bytevector=? echo #*"no-content")
+	(values 204 'text/plain)
+	(values 200 'text/plain))))
 
 )
