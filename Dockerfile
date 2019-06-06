@@ -1,4 +1,4 @@
-FROM nginx
+FROM nginx:stable
 ARG sagittarius_version
 
 # Installing Sagittarius

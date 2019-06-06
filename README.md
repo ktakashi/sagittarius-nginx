@@ -7,7 +7,7 @@ users can write web application in Scheme easily.
 Requirements
 ============
 
-This module requires Sagittarius **0.9.5**. The later version may work
+This module requires Sagittarius **0.9.6**. The later version may work
 as long as the undocumented C APIs aren't changed.
 
 How to build
@@ -24,7 +24,7 @@ $ make
 
 The module will be built in the `./build/nginx-*$version*/objs/` directory
 with the name of `ngx_http_sagittarius_module.so`. The *$version* is currently
-**1.15.8**.
+**1.16.0**.
 
 If you want to run example application, then execute the `run` target.
 The `run` target also requires `docker`. If you don't have it, just modify

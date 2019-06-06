@@ -1886,7 +1886,7 @@ static SgObject make_nginx_context(ngx_http_request_t *r)
 			 &sg_conf->cleanup_proc);
     }
     if (sg_conf->init_proc.len != 0) {
-      SgObject p;
+      volatile SgObject p;
       retrieve_procedure(p, c->library, r->connection->log,
 			 &sg_conf->init_proc);
       if (!SG_UNBOUNDP(p)) {
